@@ -1,0 +1,3394 @@
+1. Falco là gì?
+Falco là một công cụ Cloud Native Runtime Security thuộc CNCF, được thiết kế để phát hiện các hành vi bất thường trong runtime của container và host. Nó hoạt động như một IDS (Intrusion Detection System) cho cloud-native environments.
+Core Concepts:
+
+Runtime Security: Bảo vệ workload khi đang chạy, không phải lúc build/deploy
+Behavioral Detection: Phát hiện dựa trên hành vi, không phải signature
+Event-driven Architecture: Xử lý sự kiện realtime từ kernel
+
+2. Kiến trúc Falco
+2.1 Components chính:
+┌─────────────────────────────────────────┐
+│           User Space                     │
+│  ┌────────────────────────────────┐     │
+│  │     Falco Engine               │     │
+│  │  ┌──────────┐  ┌────────────┐ │     │
+│  │  │  Rules   │  │  Outputs    │ │     │
+│  │  │  Engine  │  │  Framework  │ │     │
+│  │  └──────────┘  └────────────┘ │     │
+│  └────────────────────────────────┘     │
+│           ▲                              │
+│           │ Events                       │
+│  ┌────────────────────────────────┐     │
+│  │     libsinsp/libscap           │     │
+│  └────────────────────────────────┘     │
+└─────────────────────────────────────────┘
+             ▲
+             │ System Calls
+┌─────────────────────────────────────────┐
+│           Kernel Space                   │
+│  ┌────────────────────────────────┐     │
+│  │   Falco Driver (eBPF/Module)   │     │
+│  └────────────────────────────────┘     │
+└─────────────────────────────────────────┘
+2.2 Driver Options:
+a) Kernel Module:
+
+Performance tốt nhất
+Cần quyền load kernel module
+Phụ thuộc kernel version
+
+b) eBPF Probe:
+
+Safer, không cần kernel module
+Yêu cầu kernel >= 4.14
+Performance chấp nhận được
+
+c) Modern BPF (CO-RE):
+
+Compile Once - Run Everywhere
+Kernel >= 5.8
+Tương lai của Falco
+
+3. Logic xử lý và Data Flow
+3.1 Event Processing Pipeline:
+yaml1. System Call Capture:
+   - Driver hook vào kernel
+   - Capture syscalls: open, connect, execve, etc.
+   
+2. Event Enrichment:
+   - Thêm context: container ID, pod name, namespace
+   - Process tree information
+   - Network connection details
+   
+3. Rule Evaluation:
+   - Parse rule conditions
+   - Pattern matching với events
+   - Severity classification
+   
+4. Output Generation:
+   - Format alerts
+   - Send to outputs (stdout, file, webhook, etc.)
+3.2 Rules Engine Deep Dive:
+yaml# Ví dụ Rule Structure
+- rule: Unauthorized Process in Container
+  desc: Detect unauthorized process execution
+  condition: >
+    container and
+    container.image.repository in (trusted_images) and
+    not proc.name in (allowed_processes) and
+    spawned_process
+  output: >
+    Unauthorized process started in container
+    (user=%user.name command=%proc.cmdline 
+     container_id=%container.id image=%container.image.repository)
+  priority: WARNING
+  tags: [container, process, mitre_t1055]
+4. Falco trong Kubernetes
+4.1 Deployment Strategies:
+DaemonSet Mode (Recommended):
+yamlapiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco
+spec:
+  selector:
+    matchLabels:
+      app: falco
+  template:
+    metadata:
+      labels:
+        app: falco
+    spec:
+      serviceAccount: falco
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: falco
+        image: falcosecurity/falco:latest
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: docker-socket
+          mountPath: /host/var/run/docker.sock
+        - name: containerd-socket  
+          mountPath: /host/run/containerd/containerd.sock
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: boot
+          mountPath: /host/boot
+          readOnly: true
+        - name: lib-modules
+          mountPath: /host/lib/modules
+          readOnly: true
+        - name: usr
+          mountPath: /host/usr
+          readOnly: true
+        - name: etc
+          mountPath: /host/etc
+          readOnly: true
+4.2 Kubernetes-specific Detection:
+yaml# K8s Audit Log Integration
+- rule: K8s Service Account Created
+  desc: Detect service account creation
+  condition: >
+    ka.verb=create and
+    ka.target.resource=serviceaccounts and
+    not ka.user.name in (trusted_users)
+  output: Service account created (user=%ka.user.name sa=%ka.target.name)
+  priority: INFO
+  source: k8s_audit
+5. Advanced Concepts
+5.1 Falco Plugins Architecture:
+go// Plugin Interface
+type Plugin interface {
+    Init(config string) error
+    Fields() []Field
+    Extract(evt Event) error
+    String(evt Event) string
+}
+
+// Cho phép mở rộng data sources:
+// - CloudTrail events
+// - Okta logs  
+// - GitHub audit logs
+5.2 Performance Tuning:
+yaml# falco.yaml optimization
+syscall_event_drops:
+  threshold: 0.1
+  rate: 0.03
+  max_burst: 10
+
+output_rate: 1000
+output_max_burst: 10000
+
+# Buffer sizes
+syscall_buf_size_preset: 8  # 8MB per CPU
+5.3 Detection Patterns cho K8s:
+Container Escape Detection:
+yaml- rule: Container Escape via nsenter
+  condition: >
+    spawned_process and 
+    proc.name=nsenter and
+    container and
+    not proc.pname in (docker, dockerd, containerd)
+Cryptomining Detection:
+yaml- rule: Detect Crypto Mining
+  condition: >
+    spawned_process and
+    container and
+    (proc.name in (crypto_miners) or
+     proc.cmdline contains "stratum+tcp")
+Privilege Escalation:
+yaml- rule: Set Setuid or Setgid bit
+  condition: >
+    chmod and
+    (evt.arg.mode contains "S_ISUID" or 
+     evt.arg.mode contains "S_ISGID") and
+    container
+6. Integration và Alerting
+6.1 Output Channels:
+yaml# falco.yaml
+stdout_output:
+  enabled: true
+
+file_output:
+  enabled: true
+  filename: /var/log/falco.json
+
+http_output:
+  enabled: true
+  url: http://falco-sidekick:2801
+6.2 Falcosidekick Integration:
+yaml# Routing alerts to multiple destinations
+outputs:
+  - slack
+  - elasticsearch  
+  - prometheus
+  - webhook
+  - kafka
+  - splunk
+7. Best Practices cho Production
+7.1 Rule Management:
+
+Sử dụng GitOps cho rules versioning
+Test rules trong staging trước
+Implement rule exceptions carefully
+Regular rule updates từ community
+
+7.2 Performance Monitoring:
+bash# Check dropped events
+curl localhost:8765/metrics | grep falco_evt_drops
+
+# Monitor CPU/Memory
+kubectl top pods -n falco
+7.3 Security Hardening:
+
+Chạy Falco với minimum privileges
+Sử dụng gRPC over Unix socket
+Enable mTLS cho external communications
+Rotate certificates định kỳ
+
+8. Troubleshooting Common Issues
+Driver Loading Issues:
+bash# Check driver status
+falco --support | grep -A 5 "Driver"
+
+# Manual driver loading
+insmod /usr/lib/modules/$(uname -r)/falco.ko
+High CPU Usage:
+
+Tune syscall filters
+Reduce rule complexity
+Adjust buffer sizes
+Use sampling cho non-critical rules
+
+Integration với RKE2/OCP:
+yaml# Specific cho RKE2 với containerd
+grpc:
+  enabled: true
+  unix_socket: /run/containerd/containerd.sock
+  
+# PSP/SCC requirements cho OCP
+securityContext:
+  privileged: true
+  seLinuxOptions:
+    type: spc_t
+Với stack của bạn (RKE2, Cilium, ArgoCD), Falco sẽ complement rất tốt với Cilium Network Policies để tạo defense-in-depth strategy. Bạn có thể deploy Falco qua ArgoCD và integrate alerts với monitoring stack hiện tại.hãy miêu tả sâu hơn về falco giúp tôi9:39 AMTôi sẽ đi sâu hơn vào từng khía cạnh kỹ thuật của Falco để bạn hiểu rõ cơ chế hoạt động từ kernel level đến application layer.
+1. Deep Dive vào Kernel-Level Mechanics
+1.1 System Call Interception Details
+Cơ chế Hook vào Kernel:
+c// Falco driver hooks vào sys_call_table
+struct syscall_interceptor {
+    // Original syscall pointers
+    asmlinkage long (*original_open)(const char __user *, int, umode_t);
+    asmlinkage long (*original_execve)(const char __user *, 
+                                       const char __user *const __user *,
+                                       const char __user *const __user *);
+    asmlinkage long (*original_connect)(int, struct sockaddr __user *, int);
+    
+    // Falco wrapper functions
+    asmlinkage long falco_open(const char __user *filename, int flags, umode_t mode) {
+        // Capture event data
+        struct event_data evt;
+        evt.type = PPME_SYSCALL_OPEN_E;
+        evt.tid = current->pid;
+        evt.ts = ktime_get_ns();
+        
+        // Copy arguments
+        copy_from_user(evt.args.filename, filename, PATH_MAX);
+        evt.args.flags = flags;
+        evt.args.mode = mode;
+        
+        // Send to ring buffer
+        ring_buffer_write(&evt);
+        
+        // Call original syscall
+        return original_open(filename, flags, mode);
+    }
+};
+1.2 Ring Buffer Architecture
+Memory-mapped Ring Buffer:
+c// Shared memory structure between kernel and userspace
+struct scap_ring_buffer {
+    volatile uint32_t head;     // Written by kernel
+    volatile uint32_t tail;     // Written by userspace
+    char padding[64];           // Cache line separation
+    
+    struct ppm_evt_hdr *events; // Event array
+    uint32_t size;              // Buffer size (power of 2)
+    
+    // Per-CPU buffers for lock-free operation
+    struct per_cpu_context {
+        spinlock_t lock;
+        uint64_t drops;         // Dropped events counter
+        uint64_t preemptions;   // Context switches
+    } ____cacheline_aligned_in_smp;
+};
+
+// Event structure
+struct ppm_evt_hdr {
+    uint64_t ts;               // Timestamp (nanoseconds)
+    uint64_t tid;              // Thread ID
+    uint32_t len;              // Event length
+    uint16_t type;             // Event type (PPME_*)
+    uint32_t nparams;          // Number of parameters
+};
+1.3 eBPF Implementation Details
+eBPF Program Structure:
+c// BPF Maps cho data sharing
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 8 * 1024 * 1024); // 8MB ring buffer
+} events SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, u32);   // PID
+    __type(value, struct process_info);
+    __uint(max_entries, 10240);
+} processes SEC(".maps");
+
+// Tracepoint handler
+SEC("tracepoint/syscalls/sys_enter_open")
+int trace_open(struct trace_event_raw_sys_enter *ctx) {
+    struct event_data *evt;
+    
+    // Reserve space in ring buffer
+    evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+    if (!evt)
+        return 0;
+    
+    // Populate event data
+    evt->ts = bpf_ktime_get_ns();
+    evt->pid = bpf_get_current_pid_tgid() >> 32;
+    evt->tid = bpf_get_current_pid_tgid();
+    evt->uid = bpf_get_current_uid_gid();
+    
+    // Read syscall arguments
+    bpf_probe_read_user_str(evt->filename, sizeof(evt->filename),
+                           (void *)ctx->args[0]);
+    evt->flags = ctx->args[1];
+    
+    // Submit event
+    bpf_ringbuf_submit(evt, 0);
+    return 0;
+}
+2. Advanced Rule Engine Internals
+2.1 Rule Compilation và AST
+Rule Parsing Process:
+yaml# Original rule
+- rule: Sensitive File Opened
+  condition: >
+    open_read and 
+    (fd.name=/etc/shadow or fd.name=/etc/sudoers) and
+    not proc.name in (passwd, sudo, sudoedit)
+    
+# Compiled to AST (Abstract Syntax Tree)
+AST:
+  type: AND
+  children:
+    - type: FUNCTION
+      name: open_read
+    - type: OR
+      children:
+        - type: COMPARISON
+          field: fd.name
+          op: EQUALS
+          value: /etc/shadow
+        - type: COMPARISON
+          field: fd.name
+          op: EQUALS
+          value: /etc/sudoers
+    - type: NOT
+      child:
+        type: IN
+        field: proc.name
+        list: [passwd, sudo, sudoedit]
+2.2 Field Extraction Engine
+cpp// Field extraction từ raw events
+class sinsp_filter_check {
+public:
+    // Extract field value từ event
+    virtual uint8_t* extract(sinsp_evt *evt, uint32_t* len) {
+        switch(m_field_id) {
+            case FIELD_PROC_NAME:
+                return extract_proc_name(evt, len);
+            case FIELD_CONTAINER_ID:
+                return extract_container_id(evt, len);
+            case FIELD_FD_NAME:
+                return extract_fd_name(evt, len);
+            // ... more fields
+        }
+    }
+    
+private:
+    // Process name extraction với caching
+    uint8_t* extract_proc_name(sinsp_evt *evt, uint32_t* len) {
+        // Get thread info
+        sinsp_threadinfo* tinfo = evt->get_thread_info();
+        if (!tinfo) return NULL;
+        
+        // Check cache
+        if (tinfo->m_comm_cached) {
+            *len = tinfo->m_comm.length();
+            return (uint8_t*)tinfo->m_comm.c_str();
+        }
+        
+        // Read from /proc/[pid]/comm
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "/proc/%d/comm", tinfo->m_pid);
+        
+        // Cache result
+        tinfo->m_comm = read_file(path);
+        tinfo->m_comm_cached = true;
+        
+        *len = tinfo->m_comm.length();
+        return (uint8_t*)tinfo->m_comm.c_str();
+    }
+};
+2.3 Container Context Enrichment
+cpp// Container runtime integration
+class container_engine {
+private:
+    // Multiple runtime support
+    std::unique_ptr<docker_async> m_docker;
+    std::unique_ptr<cri_async> m_cri;
+    std::unique_ptr<containerd_async> m_containerd;
+    
+public:
+    // Async container metadata lookup
+    void enrich_event(sinsp_evt* evt) {
+        // Extract container ID from cgroups
+        std::string container_id = parse_cgroup_container_id(
+            evt->get_thread_info()->m_cgroup
+        );
+        
+        if (container_id.empty()) return;
+        
+        // Check cache first
+        auto cached = m_container_cache.get(container_id);
+        if (cached) {
+            evt->m_container_info = cached;
+            return;
+        }
+        
+        // Async fetch từ runtime
+        if (m_docker && m_docker->is_running()) {
+            m_docker->fetch_container_async(container_id, 
+                [this, evt](container_info info) {
+                    evt->m_container_info = std::make_shared<container_info>(info);
+                    m_container_cache.add(info.id, evt->m_container_info);
+                });
+        }
+    }
+    
+    // Parse container ID từ cgroup path
+    std::string parse_cgroup_container_id(const std::string& cgroup) {
+        // Docker: /docker/<container_id>
+        std::regex docker_regex("/docker/([a-f0-9]{64})");
+        
+        // Containerd: /k8s.io/<container_id>
+        std::regex containerd_regex("/k8s\\.io/([a-f0-9]{64})");
+        
+        // CRI-O: /crio-<container_id>
+        std::regex crio_regex("/crio-([a-f0-9]{64})");
+        
+        std::smatch matches;
+        if (std::regex_search(cgroup, matches, docker_regex) ||
+            std::regex_search(cgroup, matches, containerd_regex) ||
+            std::regex_search(cgroup, matches, crio_regex)) {
+            return matches[1];
+        }
+        
+        return "";
+    }
+};
+3. Kubernetes Integration Deep Dive
+3.1 K8s Metadata Collection
+go// Kubernetes client integration
+type K8sMetadataCollector struct {
+    client     kubernetes.Interface
+    podCache   *cache.Store
+    svcCache   *cache.Store
+    nsCache    *cache.Store
+    
+    // Informers cho real-time updates
+    podInformer cache.SharedIndexInformer
+    svcInformer cache.SharedIndexInformer
+}
+
+func (k *K8sMetadataCollector) Start() {
+    // Setup Pod informer
+    k.podInformer = cache.NewSharedIndexInformer(
+        &cache.ListWatch{
+            ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+                return k.client.CoreV1().Pods("").List(context.TODO(), options)
+            },
+            WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+                return k.client.CoreV1().Pods("").Watch(context.TODO(), options)
+            },
+        },
+        &v1.Pod{},
+        0,
+        cache.Indexers{
+            "containerID": func(obj interface{}) ([]string, error) {
+                pod := obj.(*v1.Pod)
+                var ids []string
+                for _, c := range pod.Status.ContainerStatuses {
+                    if c.ContainerID != "" {
+                        // Extract ID từ docker://xxxxx format
+                        ids = append(ids, parseContainerID(c.ContainerID))
+                    }
+                }
+                return ids, nil
+            },
+        },
+    )
+    
+    // Event handlers
+    k.podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+        AddFunc: func(obj interface{}) {
+            k.handlePodAdd(obj.(*v1.Pod))
+        },
+        UpdateFunc: func(oldObj, newObj interface{}) {
+            k.handlePodUpdate(oldObj.(*v1.Pod), newObj.(*v1.Pod))
+        },
+        DeleteFunc: func(obj interface{}) {
+            k.handlePodDelete(obj.(*v1.Pod))
+        },
+    })
+    
+    go k.podInformer.Run(wait.NeverStop)
+}
+
+// Enrich Falco event với K8s metadata
+func (k *K8sMetadataCollector) EnrichEvent(evt *FalcoEvent) {
+    // Lookup pod by container ID
+    pods, err := k.podInformer.GetIndexer().ByIndex("containerID", evt.ContainerID)
+    if err != nil || len(pods) == 0 {
+        return
+    }
+    
+    pod := pods[0].(*v1.Pod)
+    evt.K8sMeta = &K8sMetadata{
+        Pod:         pod.Name,
+        Namespace:   pod.Namespace,
+        Labels:      pod.Labels,
+        Annotations: pod.Annotations,
+        ServiceAccount: pod.Spec.ServiceAccountName,
+    }
+    
+    // Add namespace labels
+    ns, exists, _ := k.nsCache.GetByKey(pod.Namespace)
+    if exists {
+        evt.K8sMeta.NamespaceLabels = ns.(*v1.Namespace).Labels
+    }
+}
+3.2 Kubernetes Audit Log Integration
+yaml# K8s API Server audit policy cho Falco
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  # Capture all create/update/patch operations
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete"]
+    omitStages:
+      - RequestReceived
+      
+  # Detailed logging cho sensitive resources
+  - level: RequestResponse
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps"]
+      - group: "rbac.authorization.k8s.io"
+        resources: ["clusterroles", "clusterrolebindings"]
+        
+  # Webhook configuration gửi về Falco
+  - level: Metadata
+    omitStages:
+      - RequestReceived
+go// Falco K8s Audit webhook receiver
+type K8sAuditWebhook struct {
+    server *http.Server
+    queue  chan *auditv1.Event
+}
+
+func (w *K8sAuditWebhook) HandleAuditEvent(rw http.ResponseWriter, req *http.Request) {
+    var eventList auditv1.EventList
+    
+    decoder := json.NewDecoder(req.Body)
+    if err := decoder.Decode(&eventList); err != nil {
+        http.Error(rw, err.Error(), http.StatusBadRequest)
+        return
+    }
+    
+    for _, event := range eventList.Items {
+        // Convert to Falco event format
+        falcoEvt := &FalcoEvent{
+            Time:     event.RequestReceivedTimestamp.Time,
+            Priority: "INFO",
+            Source:   "k8s_audit",
+            Rule:     "k8s_audit_event",
+            Output:   formatK8sAuditEvent(&event),
+            Fields: map[string]interface{}{
+                "ka.verb":           event.Verb,
+                "ka.user.name":      event.User.Username,
+                "ka.target.resource": event.ObjectRef.Resource,
+                "ka.target.name":    event.ObjectRef.Name,
+                "ka.target.namespace": event.ObjectRef.Namespace,
+            },
+        }
+        
+        // Queue for processing
+        select {
+        case w.queue <- &event:
+        default:
+            // Buffer full, increment drop counter
+            atomic.AddUint64(&w.droppedEvents, 1)
+        }
+    }
+    
+    rw.WriteHeader(http.StatusOK)
+}
+4. Performance Optimization Techniques
+4.1 Event Filtering at Kernel Level
+c// BPF filter để reduce overhead
+struct syscall_filter {
+    // Bitmask cho syscalls to monitor
+    uint64_t syscall_mask[8];  // Support 512 syscalls
+    
+    // Process filtering
+    struct {
+        bool enabled;
+        uint32_t *whitelist_pids;
+        uint32_t *blacklist_pids;
+    } process_filter;
+    
+    // Container filtering  
+    struct {
+        bool enabled;
+        char **include_containers;
+        char **exclude_containers;
+    } container_filter;
+};
+
+// Apply filter trong BPF program
+static __always_inline bool should_capture(struct syscall_filter *filter,
+                                          uint32_t syscall_id,
+                                          uint32_t pid) {
+    // Check syscall mask
+    uint32_t word = syscall_id / 64;
+    uint32_t bit = syscall_id % 64;
+    
+    if (!(filter->syscall_mask[word] & (1ULL << bit)))
+        return false;
+        
+    // Check process filter
+    if (filter->process_filter.enabled) {
+        if (!is_in_list(pid, filter->process_filter.whitelist_pids))
+            return false;
+    }
+    
+    return true;
+}
+4.2 Smart Buffering và Batching
+cppclass EventBuffer {
+private:
+    // Double buffering cho zero-copy
+    struct Buffer {
+        std::vector<sinsp_evt*> events;
+        std::atomic<bool> ready;
+        std::mutex mutex;
+    };
+    
+    Buffer m_buffers[2];
+    std::atomic<int> m_active_buffer{0};
+    
+    // Adaptive batching
+    struct {
+        std::chrono::steady_clock::time_point last_flush;
+        size_t current_size;
+        size_t max_size = 1000;
+        std::chrono::milliseconds max_latency{100};
+    } m_batch_config;
+    
+public:
+    void add_event(sinsp_evt* evt) {
+        auto& buffer = m_buffers[m_active_buffer];
+        
+        std::lock_guard<std::mutex> lock(buffer.mutex);
+        buffer.events.push_back(evt);
+        m_batch_config.current_size++;
+        
+        // Check flush conditions
+        bool should_flush = false;
+        auto now = std::chrono::steady_clock::now();
+        
+        if (m_batch_config.current_size >= m_batch_config.max_size) {
+            should_flush = true;  // Size threshold
+        } else if (now - m_batch_config.last_flush > m_batch_config.max_latency) {
+            should_flush = true;  // Time threshold
+        }
+        
+        if (should_flush) {
+            flush_buffer();
+        }
+    }
+    
+    void flush_buffer() {
+        // Swap buffers
+        int current = m_active_buffer.load();
+        int next = 1 - current;
+        m_active_buffer.store(next);
+        
+        // Mark current buffer as ready for processing
+        m_buffers[current].ready = true;
+        
+        // Reset batch config
+        m_batch_config.current_size = 0;
+        m_batch_config.last_flush = std::chrono::steady_clock::now();
+        
+        // Notify processor thread
+        m_condition.notify_one();
+    }
+};
+4.3 Memory Pool Management
+cpp// Object pool để reduce allocations
+template<typename T>
+class ObjectPool {
+private:
+    struct PooledObject {
+        T object;
+        std::atomic<bool> in_use{false};
+    };
+    
+    std::vector<std::unique_ptr<PooledObject>> m_pool;
+    std::atomic<size_t> m_size{0};
+    std::atomic<size_t> m_capacity{0};
+    
+    // Statistics
+    std::atomic<uint64_t> m_allocations{0};
+    std::atomic<uint64_t> m_deallocations{0};
+    std::atomic<uint64_t> m_reuses{0};
+    
+public:
+    T* acquire() {
+        // Try to find free object
+        for (auto& obj : m_pool) {
+            bool expected = false;
+            if (obj->in_use.compare_exchange_strong(expected, true)) {
+                m_reuses++;
+                return &obj->object;
+            }
+        }
+        
+        // Need to allocate new object
+        if (m_size < m_capacity) {
+            auto obj = std::make_unique<PooledObject>();
+            obj->in_use = true;
+            T* ptr = &obj->object;
+            m_pool.push_back(std::move(obj));
+            m_size++;
+            m_allocations++;
+            return ptr;
+        }
+        
+        return nullptr;  // Pool exhausted
+    }
+    
+    void release(T* ptr) {
+        for (auto& obj : m_pool) {
+            if (&obj->object == ptr) {
+                // Reset object state
+                ptr->reset();
+                obj->in_use = false;
+                m_deallocations++;
+                return;
+            }
+        }
+    }
+};
+5. Advanced Detection Patterns
+5.1 Behavioral Analysis Engine
+cpp// Machine learning-based anomaly detection
+class BehavioralAnalyzer {
+private:
+    // Process behavior baseline
+    struct ProcessProfile {
+        std::string name;
+        std::set<std::string> normal_files;      // Files normally accessed
+        std::set<uint16_t> normal_ports;         // Ports normally used
+        std::set<std::string> normal_children;   // Normal child processes
+        std::vector<double> syscall_frequency;   // Syscall pattern
+        
+        // Statistical models
+        struct {
+            double mean_cpu_usage;
+            double stddev_cpu_usage;
+            double mean_memory_usage;
+            double stddev_memory_usage;
+        } resource_stats;
+    };
+    
+    std::unordered_map<std::string, ProcessProfile> m_profiles;
+    
+    // Anomaly scoring
+    double calculate_anomaly_score(const sinsp_evt* evt,
+                                  const ProcessProfile& profile) {
+        double score = 0.0;
+        
+        // File access anomaly
+        if (evt->get_type() == PPME_SYSCALL_OPEN_X) {
+            std::string filename = evt->get_param_value_str("name");
+            if (profile.normal_files.find(filename) == profile.normal_files.end()) {
+                score += calculate_file_anomaly_score(filename, profile);
+            }
+        }
+        
+        // Network anomaly
+        if (evt->get_type() == PPME_SOCKET_CONNECT_X) {
+            uint16_t port = evt->get_param_value<uint16_t>("port");
+            if (profile.normal_ports.find(port) == profile.normal_ports.end()) {
+                score += 2.0;  // Higher weight for network anomalies
+            }
+        }
+        
+        // Syscall pattern anomaly using cosine similarity
+        auto current_pattern = extract_syscall_pattern(evt);
+        double similarity = cosine_similarity(current_pattern, 
+                                             profile.syscall_frequency);
+        if (similarity < 0.7) {
+            score += (1.0 - similarity) * 3.0;
+        }
+        
+        return score;
+    }
+    
+    // LSTM-based sequence analysis
+    class LSTMDetector {
+    private:
+        torch::jit::script::Module m_model;
+        std::deque<torch::Tensor> m_sequence_buffer;
+        size_t m_sequence_length = 100;
+        
+    public:
+        bool detect_anomaly(const std::vector<sinsp_evt*>& events) {
+            // Convert events to tensor
+            torch::Tensor input = events_to_tensor(events);
+            
+            // Add to sequence buffer
+            m_sequence_buffer.push_back(input);
+            if (m_sequence_buffer.size() > m_sequence_length) {
+                m_sequence_buffer.pop_front();
+            }
+            
+            if (m_sequence_buffer.size() < m_sequence_length) {
+                return false;  // Not enough data yet
+            }
+            
+            // Stack tensors and run through model
+            torch::Tensor sequence = torch::stack(
+                std::vector<torch::Tensor>(m_sequence_buffer.begin(), 
+                                          m_sequence_buffer.end())
+            );
+            
+            torch::Tensor output = m_model.forward({sequence}).toTensor();
+            float anomaly_probability = output.item<float>();
+            
+            return anomaly_probability > 0.8;
+        }
+    };
+};
+5.2 Correlation Engine
+cpp// Multi-event correlation cho complex attacks
+class CorrelationEngine {
+private:
+    struct AttackPattern {
+        std::string name;
+        std::vector<std::string> required_events;
+        std::chrono::seconds time_window;
+        std::function<bool(const std::vector<sinsp_evt*>&)> validator;
+    };
+    
+    // Attack patterns database
+    std::vector<AttackPattern> m_patterns = {
+        {
+            "Container Escape",
+            {"privileged_container_start", "nsenter_execution", "host_mount_access"},
+            std::chrono::seconds(300),
+            [](const auto& events) {
+                // Custom validation logic
+                return validate_container_escape(events);
+            }
+        },
+        {
+            "Lateral Movement", 
+            {"ssh_connection", "credential_access", "new_ssh_key"},
+            std::chrono::seconds(600),
+            [](const auto& events) {
+                return validate_lateral_movement(events);
+            }
+        }
+    };
+    
+    // Event correlation window
+    struct CorrelationWindow {
+        std::unordered_map<std::string, std::vector<sinsp_evt*>> events_by_type;
+        std::chrono::steady_clock::time_point start_time;
+        std::string correlation_key;  // e.g., container_id, user_id
+    };
+    
+    std::unordered_map<std::string, CorrelationWindow> m_windows;
+    
+public:
+    void process_event(sinsp_evt* evt) {
+        std::string correlation_key = extract_correlation_key(evt);
+        
+        // Get or create window
+        auto& window = m_windows[correlation_key];
+        if (window.events_by_type.empty()) {
+            window.start_time = std::chrono::steady_clock::now();
+            window.correlation_key = correlation_key;
+        }
+        
+        // Add event to window
+        std::string event_type = classify_event(evt);
+        window.events_by_type[event_type].push_back(evt);
+        
+        // Check patterns
+        for (const auto& pattern : m_patterns) {
+            if (check_pattern(window, pattern)) {
+                trigger_alert(pattern, window);
+            }
+        }
+        
+        // Clean old windows
+        clean_expired_windows();
+    }
+};
+6. Plugin Architecture Deep Dive
+6.1 Plugin Development Framework
+go// Falco plugin interface implementation
+package myplugin
+
+import (
+    "github.com/falcosecurity/plugin-sdk-go/pkg/sdk"
+)
+
+type MyPlugin struct {
+    config     PluginConfig
+    lastEvent  sdk.EventWriter
+    extraction sdk.ExtractRequestPool
+}
+
+// Plugin initialization
+func (p *MyPlugin) Init(config string) error {
+    return json.Unmarshal([]byte(config), &p.config)
+}
+
+// Info returns plugin metadata
+func (p *MyPlugin) Info() *sdk.Info {
+    return &sdk.Info{
+        ID:          999,
+        Name:        "myplugin",
+        Description: "Custom data source plugin",
+        EventSource: "myplugin",
+        Fields: []sdk.FieldEntry{
+            {Type: "string", Name: "myplugin.field1", Desc: "Custom field 1"},
+            {Type: "uint64", Name: "myplugin.field2", Desc: "Custom field 2"},
+        },
+    }
+}
+
+// Open starts event generation
+func (p *MyPlugin) Open(params string) (sdk.InstanceContext, error) {
+    // Start event collection
+    ctx := &PluginContext{
+        source: p.connectToSource(),
+        buffer: make(chan *Event, 1000),
+    }
+    
+    go ctx.collectEvents()
+    return ctx, nil
+}
+
+// NextBatch provides events to Falco
+func (p *MyPlugin) NextBatch(ctx sdk.InstanceContext, 
+                            evt sdk.EventWriter) error {
+    pCtx := ctx.(*PluginContext)
+    
+    select {
+    case event := <-pCtx.buffer:
+        // Write event data
+        evt.SetTimestamp(event.Timestamp)
+        evt.Writer().Write(event.Data)
+        return nil
+    default:
+        return sdk.ErrTimeout
+    }
+}
+
+// Extract field values from events
+func (p *MyPlugin) Extract(req sdk.ExtractRequest,
+                          evt sdk.EventReader) error {
+    // Parse event
+    var event Event
+    if err := json.Unmarshal(evt.Reader().Bytes(), &event); err != nil {
+        return err
+    }
+    
+    // Extract requested fields
+    switch req.Field() {
+    case "myplugin.field1":
+        req.SetValue(event.Field1)
+    case "myplugin.field2":
+        req.SetValue(event.Field2)
+    default:
+        return sdk.ErrFieldNotPresent
+    }
+    
+    return nil
+}
+6.2 Source Plugin Integration
+yaml# Falco configuration với custom plugins
+plugins:
+  - name: cloudtrail
+    library_path: /usr/share/falco/plugins/libcloudtrail.so
+    init_config:
+      aws_region: us-east-1
+      sqs_queue: falco-cloudtrail-queue
+      
+  - name: github
+    library_path: /usr/share/falco/plugins/libgithub.so
+    init_config:
+      webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+      port: 8080
+Tôi sẽ giải thích chi tiết về Driver, Plugin và Rule trong Falco bằng cách miêu tả khái niệm và cách hoạt động.
+1. FALCO DRIVER - "Đôi mắt" trong Kernel
+Driver là gì?
+Driver là thành phần cốt lõi nằm ở tầng kernel, hoạt động như một "máy quay an ninh" ghi lại mọi hoạt động của hệ thống. Hãy tưởng tượng Driver như một nhân viên an ninh đứng ở cửa ra vào của một tòa nhà (kernel), ghi chép lại mọi người ra vào (system calls).
+Tại sao cần Driver?
+Vấn đề cơ bản: Trong Linux, mọi hoạt động của ứng dụng (đọc file, mở network connection, chạy process) đều phải thông qua system calls. Đây là "ngôn ngữ" duy nhất để application nói chuyện với kernel.
+Giải pháp của Driver: Driver đứng ngay tại điểm giao tiếp này và "nghe lén" tất cả các cuộc hội thoại. Mỗi khi có system call, Driver sẽ:
+
+Capture thông tin TRƯỚC khi syscall thực thi
+Ghi lại KẾT QUẢ sau khi syscall hoàn thành
+Đóng gói thành event và gửi lên Falco engine
+
+Ba loại Driver và cách chúng hoạt động
+1. Kernel Module Driver
+Cách hoạt động: Giống như cài đặt một thiết bị nghe trực tiếp vào hệ thống điện thoại nội bộ của công ty. Module này được load thẳng vào kernel và thay thế system call table - bảng chứa địa chỉ của tất cả system calls.
+Quá trình:
+
+Khi load, module tìm và lưu lại địa chỉ gốc của các syscalls
+Thay thế bằng địa chỉ của wrapper functions của Falco
+Mỗi syscall giờ sẽ đi qua Falco trước → capture data → gọi syscall gốc → capture result
+
+Ưu điểm:
+
+Hiệu năng cao nhất (chạy native trong kernel)
+Không bỏ sót event nào
+Có thể capture mọi loại syscall
+
+Nhược điểm:
+
+Rủi ro cao (bug có thể gây kernel panic)
+Phải compile riêng cho mỗi kernel version
+Không chạy được trên managed Kubernetes (GKE, EKS)
+
+2. eBPF Driver
+Cách hoạt động: Như một camera an ninh thông minh được lập trình sẵn và gắn vào các điểm quan trọng. eBPF là một "máy ảo" trong kernel cho phép chạy code an toàn.
+Quá trình:
+
+eBPF programs được attach vào tracepoints/kprobes
+Khi syscall trigger tracepoint, eBPF program chạy
+Program thu thập data và gửi qua ring buffer lên userspace
+Kernel verify code trước khi chạy (đảm bảo an toàn)
+
+Ưu điểm:
+
+An toàn (không thể crash kernel)
+Không cần rebuild cho mỗi kernel
+Được support rộng rãi
+
+Nhược điểm:
+
+Performance kém hơn kernel module (~10-15%)
+Giới hạn complexity (instruction limit)
+Cần kernel >= 4.14
+
+3. Modern BPF (CO-RE)
+Cách hoạt động: Như một camera AI có thể tự điều chỉnh cài đặt phù hợp với từng môi trường. CO-RE = Compile Once, Run Everywhere.
+Quá trình:
+
+Sử dụng BTF (BPF Type Format) để hiểu structure của kernel
+Tự động adapt với kernel structure changes
+Không cần hardcode offset của fields
+Một binary chạy được trên nhiều kernel versions
+
+Ưu điểm:
+
+Portable nhất
+Tương lai của eBPF
+Maintenance dễ dàng
+
+Nhược điểm:
+
+Cần kernel >= 5.8
+Còn mới, ít documentation
+
+Driver Selection Strategy
+Chọn Driver phù hợp:
+
+Production với full control: Kernel Module
+Cloud/Managed K8s: eBPF
+Modern infrastructure: Modern BPF
+Testing/Development: eBPF (an toàn nhất)
+
+2. FALCO PLUGINS - Mở rộng "Tầm nhìn"
+Plugin là gì?
+Plugin là các module mở rộng cho phép Falco thu thập events từ các nguồn khác ngoài system calls. Nếu Driver là "mắt" nhìn vào kernel, thì Plugins là "mắt" nhìn ra thế giới bên ngoài.
+Tại sao cần Plugins?
+Giới hạn của Driver: Driver chỉ thấy được system calls - tức là hoạt động ở level OS. Nhưng nhiều threats xảy ra ở các layers khác:
+
+Cloud API calls (AWS, Azure, GCP)
+Kubernetes API operations
+Application-level events
+Database queries
+Git operations
+
+Giải pháp của Plugins: Mỗi plugin kết nối với một data source cụ thể và convert events về format mà Falco hiểu được.
+Hai loại Plugin chính
+1. Source Plugins (Event Generators)
+Mục đích: Tạo ra events từ external sources
+Cách hoạt động:
+
+Kết nối đến external source (CloudTrail, K8s Audit, GitHub webhooks)
+Poll hoặc receive events
+Transform về Falco event format
+Feed vào rules engine
+
+Ví dụ thực tế:
+CloudTrail Plugin:
+
+Kết nối với AWS SQS queue
+Nhận notification khi có CloudTrail logs mới
+Download logs từ S3
+Parse và convert thành Falco events
+Mỗi AWS API call trở thành một event
+
+Kubernetes Audit Plugin:
+
+Mở webhook endpoint
+K8s API server gửi audit logs đến webhook
+Parse audit events
+Convert thành Falco format
+Track mọi API operation trong cluster
+
+2. Extractor Plugins (Field Enrichers)
+Mục đích: Thêm context cho existing events
+Cách hoạt động:
+
+Nhận events từ drivers/source plugins
+Enrich với additional metadata
+Cache data để tối ưu performance
+Provide new fields cho rules
+
+Ví dụ thực tế:
+Kubernetes Enrichment:
+
+Nhận syscall event với container ID
+Lookup pod, namespace, deployment info
+Add K8s labels và annotations
+Provide fields như k8s.pod.name, k8s.ns.name
+
+GeoIP Plugin:
+
+Nhận network connection event
+Lookup IP geography
+Add country, city, ASN information
+Detect connections từ unusual locations
+
+Plugin Lifecycle
+1. Initialization Phase:
+
+Load plugin library
+Parse configuration
+Setup connections (database, API, queues)
+Register fields với Falco engine
+
+2. Event Generation/Processing:
+
+Source: Continuously generate events
+Extractor: Process events on-demand
+Maintain internal state và caches
+
+3. Field Extraction:
+
+Rules request specific fields
+Plugin extracts và returns values
+Lazy evaluation (chỉ extract khi cần)
+
+Plugin vs Driver
+Khác biệt chính:
+
+Driver: Low-level, kernel events, real-time, system calls
+Plugin: High-level, external events, various sources, application layer
+
+Khi nào dùng gì:
+
+Driver: Monitor process, file access, network connections ở OS level
+Plugin: Monitor cloud APIs, application logs, orchestrator events
+
+3. FALCO RULES - "Bộ não" Phân tích
+Rule là gì?
+Rule là logic định nghĩa những hành vi nào là bất thường hoặc nguy hiểm. Nếu Driver và Plugins là "mắt" thu thập data, thì Rules là "bộ não" phân tích và đưa ra cảnh báo.
+Cấu trúc của một Rule
+Mỗi rule như một "công thức nấu ăn" với các thành phần:
+1. Rule Name: Tên unique để identify rule
+2. Description: Mô tả rule detect cái gì
+3. Condition: Logic expression - "công thức" để match events
+4. Output: Message template khi rule trigger
+5. Priority: Mức độ nghiêm trọng
+6. Tags: Categories để organize rules
+Condition - Trái tim của Rule
+Condition hoạt động như thế nào:
+Condition là một biểu thức logic được evaluate với mỗi event. Giống như một chuỗi các câu hỏi Yes/No:
+
+Event này có phải là open file không?
+File có phải /etc/passwd không?
+User có phải root không?
+Process có trong whitelist không?
+
+Nếu TẤT CẢ conditions đều TRUE → Rule trigger → Alert!
+Các thành phần Building Blocks
+1. Fields
+Fields là các "biến" chứa information từ events:
+System Fields:
+
+evt.type: Loại system call (open, connect, execve)
+evt.dir: Direction (> enter, < exit)
+evt.time: Timestamp
+
+Process Fields:
+
+proc.name: Tên process
+proc.cmdline: Full command line
+proc.pid: Process ID
+
+Container Fields:
+
+container.id: Container ID
+container.image: Image name
+k8s.pod.name: Pod name
+
+2. Operators
+Các phép so sánh và logic:
+Comparison:
+
+=, !=: Equal, not equal
+>, <, >=, <=: Numeric comparisons
+contains: Substring check
+startswith, endswith: String prefix/suffix
+in: Check if value in list
+
+Logic:
+
+and, or, not: Boolean logic
+Parentheses (): Grouping
+
+3. Lists
+Lists là tập hợp values có thể reuse:
+Ví dụ: Thay vì viết:
+proc.name = bash or proc.name = sh or proc.name = zsh
+Định nghĩa list:
+list: shell_binaries
+items: [bash, sh, zsh, ksh]
+Rồi dùng:
+proc.name in (shell_binaries)
+4. Macros
+Macros là condition fragments có thể reuse:
+Ví dụ: Macro detect spawned process:
+macro: spawned_process
+condition: evt.type in (execve, execveat) and evt.dir =
+Nhiều rules có thể dùng:
+rule: Shell Spawned
+condition: spawned_process and proc.name in (shells)
+
+rule: Script Executed  
+condition: spawned_process and fd.name endswith ".sh"
+Rule Evaluation Process
+Quá trình đánh giá rule:
+
+Event Arrival: Driver/Plugin generate event
+Pre-filtering: Falco filter rules by event type (performance)
+Condition Evaluation: Check conditions theo thứ tự
+Short-circuit: Stop ngay khi gặp FALSE (optimization)
+Match: Nếu all TRUE → Format output → Send alert
+
+Rule Priority Levels
+Các mức độ nghiêm trọng:
+
+EMERGENCY: System không thể dùng được
+ALERT: Cần action ngay lập tức
+CRITICAL: Critical conditions
+ERROR: Error conditions
+WARNING: Warning conditions
+NOTICE: Normal but significant
+INFORMATIONAL: Informational messages
+DEBUG: Debug-level messages
+
+Rule Organization Patterns
+1. Detection by Attack Stage
+Initial Access Rules: Detect entry points
+
+Webshell uploads
+Reverse shells
+Exploitation attempts
+
+Persistence Rules: Detect backdoors
+
+Cron job modifications
+SSH key additions
+Service installations
+
+Lateral Movement Rules: Detect spreading
+
+SSH/SCP to other hosts
+Credential access
+Network scanning
+
+2. Detection by Resource
+File System Rules:
+
+Sensitive file access
+Binary modifications
+Log tampering
+
+Network Rules:
+
+Unexpected connections
+Port scanning
+Data exfiltration
+
+Process Rules:
+
+Suspicious process spawning
+Privilege escalation
+Container escapes
+
+Rule Exceptions
+Handling False Positives:
+Exceptions cho phép define các trường hợp rule KHÔNG nên trigger:
+Ví dụ: Rule detect viết vào /bin, nhưng package managers là hợp lệ:
+Rule: Write to /bin
+Condition: Detect any write to /bin directory
+Exception: 
+  - If process is apt/yum/dpkg AND user is root → Don't alert
+  - If container is building → Don't alert
+Rule Performance Considerations
+Optimization Guidelines:
+
+Order matters: Check cheap conditions first
+
+Simple equality checks → Fastest
+List membership → Medium
+Pattern matching → Slowest
+
+
+Early termination: Put most selective conditions first
+
+Nếu 90% events không phải container → Check container first
+
+
+Avoid expensive operations:
+
+Regex matching
+Large lists
+Complex nested conditions
+
+
+
+4. Sự Kết hợp Driver + Plugin + Rule
+Workflow Tổng thể
+Luồng xử lý hoàn chỉnh:
+
+Data Collection:
+
+Driver capture system calls từ kernel
+Plugins collect events từ external sources
+
+
+Event Enrichment:
+
+Add container metadata
+Add Kubernetes context
+Add user/group information
+
+
+Rule Evaluation:
+
+Match events against rules
+Check conditions theo thứ tự
+Skip không relevant rules
+
+
+Alert Generation:
+
+Format output message
+Include relevant fields
+Send to configured outputs
+
+
+Output Routing:
+
+stdout/file
+Syslog
+HTTP webhooks
+SIEM integration
+
+
+
+Real-world Scenario
+Kịch bản thực tế: Detect Cryptomining
+1. Driver level:
+
+Capture execve syscall khi process start
+Capture connect syscall khi kết nối network
+Monitor CPU usage qua process stats
+
+2. Plugin level:
+
+K8s plugin adds pod/namespace info
+Cloud plugin adds instance metadata
+
+3. Rule level:
+
+Check if process name matches known miners
+Check if connecting to mining pools
+Check if in unauthorized namespace
+Check CPU usage patterns
+
+4. Alert:
+
+Include tất cả relevant info
+Send to security team
+Trigger automated response
+
+Best Practices
+Driver Management:
+
+Monitor dropped events
+Tune buffer sizes
+Use appropriate driver cho environment
+
+Plugin Configuration:
+
+Enable caching cho performance
+Configure appropriate timeouts
+Monitor plugin health
+
+Rule Development:
+
+Start với broad detection
+Refine based on false positives
+Test trong staging first
+Document exceptions clearly
+Version control rules
+
+Với hiểu biết sâu này, bạn có thể thiết kế và triển khai Falco hiệu quả cho environment của mình, từ việc chọn driver phù hợp, config plugins cần thiết, đến viết rules chính xác cho các use cases cụ thể.hệ thống  k8s của tôi không được kết nối trực tiếp với internet mà chỉ có nexus làm proxy hãy chỉ tôi cách deploy falco qua helm chart trên môi trường của tôi10:51 AMTôi sẽ hướng dẫn bạn deploy Falco trên môi trường air-gapped K8s với Nexus làm proxy. Đây là quy trình chi tiết cho RKE2/OCP environment của bạn.
+1. Chuẩn bị Nexus Repository
+1.1 Setup Nexus Repositories
+bash# Tạo các repository cần thiết trong Nexus
+
+# 1. Docker Registry (hosted)
+# - Name: docker-internal
+# - Port: 8443
+# - Enable Docker V2 API
+
+# 2. Helm Repository (hosted)  
+# - Name: helm-internal
+# - Format: helm
+
+# 3. Raw Repository (cho driver files)
+# - Name: falco-drivers
+# - Format: raw
+
+# 4. Proxy repositories (nếu Nexus có controlled internet access)
+# - docker-hub-proxy → proxy.docker.io
+# - quay-proxy → quay.io
+# - helm-falco-proxy → https://falcosecurity.github.io/charts
+1.2 Configure Nexus Credentials
+bash# Tạo secret cho Docker registry access
+kubectl create namespace falco-system
+
+kubectl create secret docker-registry nexus-docker-creds \
+  --docker-server=nexus.internal.com:8443 \
+  --docker-username=admin \
+  --docker-password=${NEXUS_PASSWORD} \
+  --docker-email=admin@internal.com \
+  -n falco-system
+
+# Tạo secret cho Helm repository
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nexus-helm-creds
+  namespace: falco-system
+type: Opaque
+data:
+  username: $(echo -n "admin" | base64)
+  password: $(echo -n "${NEXUS_PASSWORD}" | base64)
+EOF
+2. Sync Falco Images và Dependencies
+2.1 Script để Pull và Push Images
+bash#!/bin/bash
+# sync-falco-images.sh
+
+# Configuration
+NEXUS_REGISTRY="nexus.internal.com:8443"
+NEXUS_USER="admin"
+NEXUS_PASS="${NEXUS_PASSWORD}"
+
+# Falco images cần sync
+FALCO_VERSION="0.38.0"
+FALCOSIDEKICK_VERSION="2.28.0"
+FALCO_EXPORTER_VERSION="0.8.3"
+
+declare -a IMAGES=(
+  "falcosecurity/falco:${FALCO_VERSION}"
+  "falcosecurity/falco-driver-loader:${FALCO_VERSION}"
+  "falcosecurity/falcosidekick:${FALCOSIDEKICK_VERSION}"
+  "falcosecurity/falco-exporter:${FALCO_EXPORTER_VERSION}"
+)
+
+# Login to Nexus
+docker login ${NEXUS_REGISTRY} -u ${NEXUS_USER} -p ${NEXUS_PASS}
+
+# Pull, tag và push images
+for IMAGE in "${IMAGES[@]}"; do
+  echo "Processing ${IMAGE}..."
+  
+  # Pull from public registry (từ jumpbox có internet)
+  docker pull ${IMAGE}
+  
+  # Tag cho internal registry
+  INTERNAL_IMAGE="${NEXUS_REGISTRY}/${IMAGE}"
+  docker tag ${IMAGE} ${INTERNAL_IMAGE}
+  
+  # Push to Nexus
+  docker push ${INTERNAL_IMAGE}
+  
+  echo "✓ ${IMAGE} synced successfully"
+done
+
+# Sync falcosidekick UI nếu cần
+docker pull falcosecurity/falcosidekick-ui:2.2.0
+docker tag falcosecurity/falcosidekick-ui:2.2.0 ${NEXUS_REGISTRY}/falcosecurity/falcosidekick-ui:2.2.0
+docker push ${NEXUS_REGISTRY}/falcosecurity/falcosidekick-ui:2.2.0
+2.2 Sync Falco Drivers
+bash#!/bin/bash
+# sync-falco-drivers.sh
+
+# Download drivers cho các kernel versions trong cluster
+DRIVER_VERSION="7.2.0+driver"
+KERNELS=$(kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.kernelVersion}' | tr ' ' '\n' | sort -u)
+
+# Directory để lưu drivers
+mkdir -p falco-drivers
+
+for KERNEL in ${KERNELS}; do
+  echo "Downloading driver for kernel ${KERNEL}..."
+  
+  # Download eBPF probe
+  PROBE_NAME="falco_${DRIVER_VERSION}_$(echo ${KERNEL} | tr - _).o"
+  wget -P falco-drivers/ \
+    https://download.falco.org/driver/${DRIVER_VERSION}/${PROBE_NAME}
+  
+  # Download kernel module nếu cần
+  MODULE_NAME="falco_${DRIVER_VERSION}_$(echo ${KERNEL} | tr - _).ko"
+  wget -P falco-drivers/ \
+    https://download.falco.org/driver/${DRIVER_VERSION}/${MODULE_NAME}
+done
+
+# Upload drivers to Nexus Raw Repository
+for FILE in falco-drivers/*; do
+  curl -u ${NEXUS_USER}:${NEXUS_PASS} \
+    --upload-file ${FILE} \
+    https://nexus.internal.com/repository/falco-drivers/$(basename ${FILE})
+done
+3. Download và Modify Helm Chart
+3.1 Download Falco Helm Chart
+bash# Từ jumpbox có internet access
+helm repo add falcosecurity https://falcosecurity.github.io/charts
+helm repo update
+
+# Pull chart về local
+helm pull falcosecurity/falco --version 4.5.1
+tar -xzvf falco-4.5.1.tgz
+
+# Pull falcosidekick chart nếu cần
+helm pull falcosecurity/falcosidekick --version 0.7.15
+tar -xzvf falcosidekick-0.7.15.tgz
+3.2 Modify Chart Values cho Air-gapped Environment
+yaml# custom-values.yaml
+# Falco configuration cho air-gapped deployment
+
+# Image configuration - Point to Nexus
+image:
+  registry: nexus.internal.com:8443
+  repository: falcosecurity/falco
+  tag: "0.38.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: nexus-docker-creds
+
+# Driver configuration
+driver:
+  enabled: true
+  # Ưu tiên dùng eBPF cho RKE2/OCP
+  kind: ebpf
+  
+  # Driver loader configuration
+  loader:
+    enabled: true
+    image:
+      registry: nexus.internal.com:8443
+      repository: falcosecurity/falco-driver-loader
+      tag: "0.38.0"
+    
+    # Point to internal driver repository
+    env:
+      - name: DRIVERS_REPO
+        value: "https://nexus.internal.com/repository/falco-drivers"
+      - name: SKIP_DRIVER_BUILD
+        value: "true"  # Không build driver (không có compiler)
+
+# For RKE2 với containerd
+containerRuntime:
+  implementation: containerd
+  containerd:
+    socket: /run/k3s/containerd/containerd.sock  # RKE2 path
+
+# Falco configuration
+falco:
+  # Rules configuration
+  rules_file:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/k8s_audit_rules.yaml
+    - /etc/falco/rules.d
+  
+  # JSON output cho SIEM integration
+  json_output: true
+  json_include_output_property: true
+  
+  # Logging
+  log_level: info
+  log_stderr: true
+  log_syslog: true
+  
+  # Performance tuning cho production
+  syscall_event_drops:
+    threshold: 0.1
+    actions:
+      - log
+      - alert
+  
+  # Buffer size cho high-volume environment
+  syscall_buf_size_preset: 8  # 8MB per CPU
+
+# Custom Rules
+customRules:
+  rules-custom.yaml: |-
+    - rule: Unauthorized Container Registry
+      desc: Detect containers from non-approved registries
+      condition: >
+        container and
+        container.image.repository != "nexus.internal.com:8443" and
+        not container.image.repository startswith "nexus.internal.com"
+      output: >
+        Container from unauthorized registry
+        (image=%container.image.repository pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: WARNING
+      tags: [policy, compliance]
+
+# Metrics for monitoring
+metrics:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 8765
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+
+# Node selector cho security nodes nếu có
+nodeSelector: {}
+  # node-role.kubernetes.io/security: "true"
+
+# Tolerations cho system nodes
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+    operator: Exists
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/etcd
+    operator: Exists
+
+# Service Account
+serviceAccount:
+  create: true
+  name: falco
+
+# RBAC
+rbac:
+  create: true
+
+# Priority Class cho critical security component
+priorityClassName: system-node-critical
+
+# DaemonSet update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# Enable k8s audit logs nếu cần
+auditLog:
+  enabled: false  # Enable nếu đã config k8s audit
+
+# Falcosidekick integration
+falcosidekick:
+  enabled: true
+  image:
+    registry: nexus.internal.com:8443
+    repository: falcosecurity/falcosidekick
+    tag: "2.28.0"
+  
+  # Output configuration
+  config:
+    # Slack notification
+    slack:
+      webhookurl: ""  # Add webhook URL
+      minimumpriority: warning
+    
+    # Elasticsearch để lưu events
+    elasticsearch:
+      hostport: "https://elasticsearch.internal.com:9200"
+      index: "falco-events"
+      type: "_doc"
+      minimumpriority: notice
+      # Creds từ secret
+      username: ""
+      password: ""
+    
+    # Webhook cho SOAR integration  
+    webhook:
+      address: "https://soar.internal.com/webhook/falco"
+      minimumpriority: warning
+4. Package và Upload Chart to Nexus
+4.1 Package Modified Chart
+bash# Package chart với custom values
+helm package falco/ --version 4.5.1-internal
+
+# Nếu có falcosidekick riêng
+helm package falcosidekick/ --version 0.7.15-internal
+4.2 Upload to Nexus Helm Repository
+bash# Upload chart files to Nexus
+curl -u ${NEXUS_USER}:${NEXUS_PASS} \
+  --upload-file falco-4.5.1-internal.tgz \
+  https://nexus.internal.com/repository/helm-internal/
+
+curl -u ${NEXUS_USER}:${NEXUS_PASS} \
+  --upload-file falcosidekick-0.7.15-internal.tgz \
+  https://nexus.internal.com/repository/helm-internal/
+5. Deploy Falco từ Nexus
+5.1 Add Nexus Helm Repository
+bash# Add Nexus as helm repo
+helm repo add nexus-helm https://nexus.internal.com/repository/helm-internal/ \
+  --username ${NEXUS_USER} \
+  --password ${NEXUS_PASS}
+
+helm repo update
+5.2 Deploy Falco
+bash# Create namespace nếu chưa có
+kubectl create namespace falco-system
+
+# Deploy Falco với custom values
+helm install falco nexus-helm/falco \
+  --namespace falco-system \
+  --values custom-values.yaml \
+  --version 4.5.1-internal
+
+# Verify deployment
+kubectl get pods -n falco-system
+kubectl get daemonset -n falco-system
+6. Post-Installation Configuration
+6.1 Verify Driver Loading
+bash# Check driver status trên mỗi node
+kubectl exec -n falco-system falco-xxxxx -- falco --support | grep "Driver:"
+
+# Check logs cho driver loading
+kubectl logs -n falco-system -l app.kubernetes.io/name=falco --tail=50
+6.2 Configure GitOps với ArgoCD
+yaml# falco-application.yaml cho ArgoCD
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: falco
+  namespace: argocd
+spec:
+  project: security
+  source:
+    repoURL: https://nexus.internal.com/repository/helm-internal/
+    targetRevision: 4.5.1-internal
+    chart: falco
+    helm:
+      valueFiles:
+        - values.yaml
+      parameters:
+        - name: image.registry
+          value: nexus.internal.com:8443
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: falco-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+6.3 Setup Monitoring
+bash# Create ServiceMonitor cho Prometheus
+cat <<EOF | kubectl apply -f -
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: falco-metrics
+  namespace: falco-system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falco
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+EOF
+7. Troubleshooting Air-gapped Issues
+7.1 Common Issues và Solutions
+bash# Issue 1: Driver download fails
+# Solution: Pre-download và host trong Nexus
+kubectl exec -n falco-system falco-xxx -- ls -la /host/usr/src/
+
+# Issue 2: Image pull errors
+# Solution: Verify image exists trong Nexus
+curl -u ${NEXUS_USER}:${NEXUS_PASS} \
+  https://nexus.internal.com/service/rest/v1/search?repository=docker-internal&name=falco
+
+# Issue 3: Helm chart not found
+# Solution: Check Nexus helm repository
+helm search repo nexus-helm/
+
+# Issue 4: Driver build fails (no internet)
+# Solution: Ensure SKIP_DRIVER_BUILD=true và pre-built drivers available
+7.2 Validation Script
+bash#!/bin/bash
+# validate-falco-deployment.sh
+
+echo "=== Falco Deployment Validation ==="
+
+# Check pods running
+echo "1. Checking Falco pods..."
+kubectl get pods -n falco-system
+
+# Check driver loaded
+echo "2. Checking driver status..."
+for POD in $(kubectl get pods -n falco-system -l app.kubernetes.io/name=falco -o name); do
+  echo "Pod: ${POD}"
+  kubectl exec -n falco-system ${POD} -- falco --support | grep "Driver:"
+done
+
+# Check for events
+echo "3. Checking Falco events..."
+kubectl exec -n falco-system deployment/falco -- tail -n 10 /var/log/falco/events.txt
+
+# Check metrics
+echo "4. Checking metrics endpoint..."
+kubectl port-forward -n falco-system svc/falco-metrics 8765:8765 &
+PF_PID=$!
+sleep 2
+curl -s localhost:8765/metrics | grep falco_
+kill ${PF_PID}
+
+echo "=== Validation Complete ==="
+8. Maintenance Tasks
+8.1 Update Falco Version
+bash# Script để update Falco trong air-gapped environment
+#!/bin/bash
+
+NEW_VERSION="0.38.1"
+
+# 1. Download new images từ jumpbox
+# 2. Push to Nexus
+# 3. Update helm values
+# 4. Upgrade helm release
+
+helm upgrade falco nexus-helm/falco \
+  --namespace falco-system \
+  --values custom-values.yaml \
+  --set image.tag=${NEW_VERSION}
+8.2 Sync New Drivers cho Kernel Updates
+bash# Khi có kernel updates trong cluster
+NEW_KERNEL=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kernelVersion}')
+
+# Download driver cho new kernel
+# Upload to Nexus
+# Restart Falco pods để load new driver
+kubectl rollout restart daemonset/falco -n falco-system
+Với setup này, Falco sẽ chạy hoàn toàn trong môi trường air-gapped của bạn thông qua Nexus proxy. Quan trọng là phải pre-stage tất cả images, drivers và dependencies trong Nexus trước khi deploy.tôi kiểm tra kernel version 6.11.0-061100-generic tôi không tìm thấy phiên bản nào trên download.falco.org/driver2:03 PMKernel 6.11.0 là rất mới và Falco chưa có pre-built drivers. Đây là cách xử lý cho kernel version không có sẵn driver trong môi trường air-gapped của bạn.
+1. Hiểu về Vấn đề
+1.1 Tại sao không có driver?
+bash# Check available drivers
+curl -s https://download.falco.org/driver/site/index.json | jq . | grep -i "6.11"
+# Sẽ không tìm thấy vì:
+# - Kernel 6.11 quá mới (released recently)
+# - Falco team chưa build drivers cho version này
+# - Pre-built drivers thường lag behind kernel releases
+1.2 Các Options cho Kernel mới
+
+Build driver từ source (khó trong air-gapped)
+Dùng eBPF thay vì kernel module (recommended)
+Dùng Modern eBPF (CO-RE) (best option)
+Build driver offline và import
+
+2. Solution 1: Sử dụng Modern eBPF (CO-RE) - RECOMMENDED
+2.1 Modern eBPF với CO-RE Support
+yaml# custom-values-modern-ebpf.yaml
+driver:
+  enabled: true
+  # Dùng modern_ebpf thay vì ebpf thường
+  kind: modern_ebpf
+  
+  # Modern eBPF không cần kernel-specific driver!
+  modern_ebpf:
+    # CO-RE probe có thể chạy trên nhiều kernel versions
+    bundled_probe: true
+    
+  loader:
+    enabled: true
+    image:
+      registry: nexus.internal.com:8443
+      repository: falcosecurity/falco-driver-loader
+      tag: "master"  # Dùng master tag cho kernel mới nhất
+    
+    env:
+      # Skip download và build
+      - name: FALCO_BPF_USE_MODERN_BPF
+        value: "true"
+      - name: DRIVERS_REPO
+        value: ""  # Không cần download
+      - name: SKIP_DRIVER_DOWNLOAD
+        value: "true"
+
+# Falco configuration cho modern eBPF
+falco:
+  # Modern eBPF settings
+  modern_bpf:
+    cpus_for_each_buffer: 2
+    buf_size_preset: 8  # 8MB per CPU
+    
+  # Enable BTF support
+  enable_btf: true
+  
+  # Performance tuning
+  syscall_event_drops:
+    threshold: 0.1
+    actions:
+      - log
+      - alert
+2.2 Verify BTF Support trong Kernel
+bash# Check BTF support (required cho CO-RE)
+kubectl run test-btf --image=alpine --rm -it --restart=Never -- sh -c "
+  apk add --no-cache file
+  file /sys/kernel/btf/vmlinux
+"
+
+# Output expected: /sys/kernel/btf/vmlinux: BTF data
+# Nếu có BTF → Modern eBPF sẽ work!
+3. Solution 2: Build Driver Offline
+3.1 Setup Build Environment (trên jumpbox)
+bash#!/bin/bash
+# build-falco-driver-offline.sh
+
+# Install dependencies
+apt-get update
+apt-get install -y \
+  build-essential \
+  linux-headers-6.11.0-061100-generic \
+  cmake \
+  git \
+  pkg-config \
+  autoconf \
+  libtool \
+  libelf-dev \
+  gcc \
+  clang \
+  llvm
+
+# Clone Falco libs
+git clone https://github.com/falcosecurity/libs.git
+cd libs
+
+# Checkout stable version
+FALCO_VERSION="0.18.1"
+git checkout ${FALCO_VERSION}
+
+# Build eBPF probe cho kernel 6.11
+mkdir -p build
+cd build
+cmake -DBUILD_BPF=ON \
+      -DBUILD_DRIVER=OFF \
+      -DCMAKE_BUILD_TYPE=Release \
+      ..
+
+make bpf
+
+# Output file
+ls -la driver/bpf/probe.o
+# Copy this probe.o file
+3.2 Build Kernel Module (nếu cần)
+bash#!/bin/bash
+# build-kernel-module.sh
+
+# Download driver source
+DRIVER_VERSION="7.3.0+driver"
+wget https://github.com/falcosecurity/libs/archive/${DRIVER_VERSION}.tar.gz
+tar -xzf ${DRIVER_VERSION}.tar.gz
+
+cd libs-${DRIVER_VERSION}/driver
+
+# Build kernel module
+make KERNELDIR=/lib/modules/6.11.0-061100-generic/build
+
+# Output: falco.ko
+ls -la falco.ko
+
+# Rename với proper convention
+mv falco.ko falco_${DRIVER_VERSION}_6.11.0-061100-generic.ko
+3.3 Package và Upload to Nexus
+bash# Package drivers
+tar -czf falco-drivers-6.11.0.tar.gz \
+  probe.o \
+  falco_*_6.11.0-061100-generic.ko
+
+# Upload to Nexus
+curl -u ${NEXUS_USER}:${NEXUS_PASS} \
+  --upload-file falco-drivers-6.11.0.tar.gz \
+  https://nexus.internal.com/repository/falco-drivers/
+
+# Create ConfigMap với driver
+kubectl create configmap falco-driver-6.11 \
+  --from-file=probe.o \
+  --from-file=falco.ko \
+  -n falco-system
+4. Solution 3: Use eBPF với Generic Probe
+4.1 Deploy với Generic eBPF Probe
+yaml# values-generic-ebpf.yaml
+driver:
+  enabled: true
+  kind: ebpf
+  
+  ebpf:
+    # Path to generic probe
+    path: /etc/falco/probe.o
+    
+    # Host proc mount
+    hostProc: /host/proc
+    
+  loader:
+    enabled: false  # Disable auto-loader
+    
+# Mount pre-built probe
+extraVolumes:
+  - name: ebpf-probe
+    configMap:
+      name: falco-driver-6.11
+      items:
+        - key: probe.o
+          path: probe.o
+          
+extraVolumeMounts:
+  - name: ebpf-probe
+    mountPath: /etc/falco
+    readOnly: true
+5. Solution 4: Falco No-Driver Mode (Limited)
+4.1 Plugin-only Mode
+yaml# values-no-driver.yaml
+# Dùng plugins thay vì syscall monitoring
+
+driver:
+  enabled: false  # Disable driver completely
+
+# Enable plugins for monitoring
+plugins:
+  - name: k8saudit
+    library_path: /usr/share/falco/plugins/libk8saudit.so
+    init_config: |
+      webhook:
+        bind_address: 0.0.0.0
+        bind_port: 9765
+    open_params: ""
+    
+  - name: container_logs
+    library_path: /usr/share/falco/plugins/libcontainer_logs.so
+    init_config: |
+      logs_path: /var/log/containers
+      
+# Rules cho plugins only
+customRules:
+  plugin-rules.yaml: |-
+    - rule: K8s Unauthorized Access
+      desc: Detect unauthorized K8s API access
+      condition: >
+        ka.verb in (create, delete) and
+        ka.target.resource in (secrets, configmaps) and
+        not ka.user.name in (system:serviceaccount:*)
+      output: Unauthorized K8s API access
+      priority: WARNING
+      source: k8s_audit
+6. Automated Solution với Init Container
+6.1 Driver Builder Init Container
+yaml# values-with-builder.yaml
+driver:
+  loader:
+    initContainer:
+      enabled: true
+      image:
+        registry: nexus.internal.com:8443
+        repository: falcosecurity/falco-driver-loader
+        
+      env:
+        # Try to build if not found
+        - name: FALCO_DRIVER_BUILD
+          value: "true"
+        - name: BUILD_KERNEL_MODULE
+          value: "false"  # Only build eBPF
+        - name: BUILD_BPF_PROBE
+          value: "true"
+          
+      # Mount requirements for building
+      volumeMounts:
+        - name: kernel-headers
+          mountPath: /lib/modules
+          readOnly: true
+        - name: usr-src
+          mountPath: /usr/src
+          readOnly: true
+          
+volumes:
+  - name: kernel-headers
+    hostPath:
+      path: /lib/modules
+  - name: usr-src  
+    hostPath:
+      path: /usr/src
+6.2 Pre-stage Build Requirements trong Nexus
+bash#!/bin/bash
+# prepare-build-deps.sh
+
+# Download kernel headers offline
+apt-get download linux-headers-6.11.0-061100-generic
+apt-get download linux-headers-6.11.0-061100
+
+# Create tar archive
+tar -czf kernel-headers-6.11.0.tar.gz *.deb
+
+# Upload to Nexus
+curl -u ${NEXUS_USER}:${NEXUS_PASS} \
+  --upload-file kernel-headers-6.11.0.tar.gz \
+  https://nexus.internal.com/repository/raw-hosted/
+7. Verification và Troubleshooting
+7.1 Check Driver Status
+bash# Verify driver loading
+kubectl exec -n falco-system falco-xxxxx -- sh -c '
+  ls -la /host/proc/self/fd/ | grep bpf
+  cat /proc/modules | grep falco
+  ls -la /sys/kernel/debug/tracing/events/syscalls/
+'
+
+# Check Falco status
+kubectl exec -n falco-system falco-xxxxx -- falco --version --verbose
+7.2 Debug Driver Issues
+bash# Debug script
+cat <<'EOF' > debug-driver.sh
+#!/bin/bash
+
+echo "=== Kernel Info ==="
+uname -a
+cat /proc/version
+
+echo "=== BTF Support ==="
+ls -la /sys/kernel/btf/
+
+echo "=== eBPF Support ==="
+ls -la /sys/fs/bpf/
+
+echo "=== Available Drivers ==="
+find / -name "*.ko" -o -name "*.o" 2>/dev/null | grep falco
+
+echo "=== Falco Driver Loader Logs ==="
+journalctl -u falco-driver-loader --no-pager -n 50
+EOF
+
+kubectl cp debug-driver.sh falco-system/falco-xxxxx:/tmp/
+kubectl exec -n falco-system falco-xxxxx -- bash /tmp/debug-driver.sh
+8. Best Practices cho Kernel Mới
+8.1 Recommendation Matrix
+yaml# Decision matrix cho kernel versions
+Kernel Version | Solution | Complexity | Performance
+--------------|----------|------------|-------------
+6.11.0+       | Modern eBPF (CO-RE) | Low | Good
+6.11.0+       | Build offline | High | Best  
+6.11.0+       | Generic eBPF | Medium | Good
+6.11.0+       | Plugin-only | Low | Limited
+
+# Recommended approach cho production:
+1. Try Modern eBPF first (simplest)
+2. If not work → Build offline
+3. Fallback → Plugin-only mode
+8.2 Automation Script cho Future Kernels
+bash#!/bin/bash
+# auto-handle-new-kernel.sh
+
+KERNEL_VERSION=$(uname -r)
+
+# Check if driver exists
+if curl -s https://download.falco.org/driver/site/index.json | grep -q "${KERNEL_VERSION}"; then
+  echo "Driver exists, downloading..."
+  # Download and upload to Nexus
+else
+  echo "Driver not found for ${KERNEL_VERSION}"
+  echo "Attempting Modern eBPF deployment..."
+  
+  # Deploy với Modern eBPF
+  helm upgrade --install falco nexus-helm/falco \
+    --namespace falco-system \
+    --set driver.kind=modern_ebpf \
+    --set driver.modern_ebpf.bundled_probe=true
+fi
+9. Monitoring và Alerting
+yaml# Alert rule cho driver issues
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: falco-driver-alerts
+  namespace: falco-system
+spec:
+  groups:
+    - name: falco.driver
+      rules:
+        - alert: FalcoDriverNotLoaded
+          expr: falco_driver_loaded == 0
+          for: 5m
+          annotations:
+            summary: "Falco driver not loaded on {{ $labels.node }}"
+            
+        - alert: FalcoHighDropRate
+          expr: rate(falco_events_dropped[5m]) > 0.1
+          annotations:
+            summary: "High event drop rate on {{ $labels.node }}"
+Với kernel 6.11.0, tôi recommend bạn dùng Modern eBPF (Solution 1) vì:
+
+Không cần build driver
+CO-RE support multiple kernels
+Dễ maintain trong air-gapped environment
+Performance tốt
+
+Nếu Modern eBPF không work (do kernel config), fallback sang build offline hoặc plugin-only mode để vẫn có monitoring cơ bản.toi deploy value 
+falcoctl:
+  artifact:
+    install:
+      enabled: false
+    follow:
+      enabled: false
+driver:
+  loader:
+    enabled: false
+  kind: ebpf
+  ebpf:
+    enabled: true
+falco:
+  rulesFile:
+    defaultRules: true
+bi loi 
+runtime error: cannot register plugin /usr/share/falco/plugins/libcontainer.so in inspector: found anthoner plugin with name coantainerShow less2:07 PMLỗi này xảy ra do conflict giữa các plugins trong Falco. Có vẻ như có duplicate plugin registration hoặc typo trong plugin name. Tôi sẽ giúp bạn fix issue này cho môi trường air-gapped.
+1. Phân tích Lỗi
+1.1 Nguyên nhân lỗi
+bash# Lỗi cho thấy:
+# 1. Plugin "container" được register 2 lần
+# 2. Có typo "coantainer" trong error message (có thể là bug trong Falco)
+# 3. libcontainer.so conflict với plugin khác
+2. Fixed Values cho Air-gapped Environment
+2.1 Complete Working Values
+yaml# falco-values-airgapped.yaml
+# Working configuration cho air-gapped K8s với Nexus
+
+# Image configuration
+image:
+  registry: nexus.internal.com:8443
+  repository: falcosecurity/falco
+  tag: "0.38.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: nexus-docker-creds
+
+# Disable falcoctl trong air-gapped
+falcoctl:
+  artifact:
+    install:
+      enabled: false  # Disable artifact installation (cần internet)
+    follow:
+      enabled: false  # Disable artifact following (cần internet)
+  config:
+    artifact:
+      allowedTypes:
+        - rulesfile
+        - plugin
+      install:
+        enabled: false
+      follow:
+        enabled: false
+
+# Driver configuration cho kernel 6.11
+driver:
+  enabled: true
+  kind: modern_ebpf  # Dùng modern_ebpf thay vì ebpf cho kernel mới
+  
+  # Disable loader trong air-gapped
+  loader:
+    enabled: false
+    
+  # Modern eBPF config
+  modern_ebpf:
+    bundledProbe: true  # Use bundled probe
+    
+  # Legacy eBPF config (backup)
+  ebpf:
+    enabled: false
+    hostNetwork: true
+    leastPrivileged: false
+
+# Plugin configuration - FIX CONFLICT
+plugins:
+  # Disable conflicting plugins
+  - name: container
+    enabled: false  # Disable để tránh conflict
+    
+  - name: k8saudit
+    enabled: true
+    library_path: /usr/share/falco/plugins/libk8saudit.so
+    init_config: ""
+    open_params: ""
+
+# Collections configuration
+collectors:
+  enabled: true
+  docker:
+    enabled: false  # Disable nếu dùng containerd
+  containerd:
+    enabled: true
+    socket: /run/containerd/containerd.sock  # Adjust cho RKE2/K3s
+  crio:
+    enabled: false
+  kubernetes:
+    enabled: true
+    
+# Falco configuration
+falco:
+  # Rules configuration
+  rules_file:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/k8s_audit_rules.yaml
+    
+  # Disable plugin conflicts
+  load_plugins: []  # Empty list để control manually
+  
+  # JSON output
+  json_output: true
+  json_include_output_property: true
+  json_include_tags_property: true
+  
+  # Log configuration
+  log_stderr: true
+  log_syslog: false
+  log_level: info
+  
+  # Priority
+  priority: debug
+  
+  # Buffering
+  buffered_outputs: false
+  
+  # Syscall configuration
+  syscall_event_drops:
+    threshold: 0.1
+    actions:
+      - log
+      - alert
+    rate: 0.03
+    max_burst: 1
+    
+  syscall_event_timeouts:
+    max_consecutives: 1000
+    
+  # Performance
+  output_timeout: 2000
+  outputs_rate: 1
+  outputs_max_burst: 1000
+  
+  # Watch config file
+  watch_config_files: true
+  
+  # Time format
+  time_format_iso_8601: false
+  
+  # Hostname
+  hostname: ""
+  
+  # gRPC
+  grpc:
+    enabled: false
+  grpc_output:
+    enabled: false
+    
+  # Metadata fetch
+  metadata_download:
+    max_mb: 100
+    chunk_wait_us: 1000
+    watch_freq_sec: 1
+    
+  # Modern eBPF specific
+  modern_bpf:
+    cpus_for_each_syscall_buffer: 2
+    syscall_buf_size_preset: 4
+
+# Container runtime configuration
+container_runtime:
+  runtime: containerd
+  socket_path: /run/containerd/containerd.sock
+
+# Tolerations
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+    operator: Exists
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+    operator: Exists
+
+# Resources
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod Security Context
+podSecurityContext:
+  privileged: true
+
+# Security Context
+securityContext:
+  privileged: true
+  allowPrivilegeEscalation: true
+  readOnlyRootFilesystem: false
+  runAsNonRoot: false
+  runAsUser: 0
+  capabilities:
+    drop: []
+    add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
+
+# Extra environment variables
+extraEnv:
+  - name: SKIP_DRIVER_LOADER
+    value: "true"
+  - name: FALCO_BPF_PROBE
+    value: ""
+    
+# Metrics
+metrics:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 8765
+    targetPort: 8765
+    nodePort: null
+    labels: {}
+    annotations: {}
+
+# Priority Class
+priorityClassName: system-node-critical
+
+# Node Selector
+nodeSelector: {}
+
+# Affinity
+affinity: {}
+
+# Update Strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# Pod Annotations
+podAnnotations: {}
+
+# Pod Labels  
+podLabels: {}
+
+# Extra Volumes
+extraVolumes: []
+
+# Extra Volume Mounts
+extraVolumeMounts: []
+
+# Lifecycle hooks
+lifecycleHooks: {}
+
+# Custom rules
+customRules:
+  custom-rules.yaml: |-
+    - rule: Detect Shell in Container
+      desc: Alert if shell is run in container
+      condition: >
+        container.id != host and
+        proc.name in (bash, sh, zsh) and
+        spawned_process
+      output: >
+        Shell in container (user=%user.name container=%container.name 
+        shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [container, shell, mitre_execution]
+3. Deploy Script cho Air-gapped
+3.1 Complete Deployment Script
+bash#!/bin/bash
+# deploy-falco-airgapped.sh
+
+set -e
+
+NAMESPACE="falco-system"
+NEXUS_REGISTRY="nexus.internal.com:8443"
+NEXUS_USER="admin"
+NEXUS_PASS="${NEXUS_PASSWORD}"
+
+echo "=== Deploying Falco in Air-gapped Environment ==="
+
+# 1. Create namespace
+echo "Creating namespace..."
+kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+# 2. Create image pull secret
+echo "Creating image pull secret..."
+kubectl create secret docker-registry nexus-docker-creds \
+  --docker-server=${NEXUS_REGISTRY} \
+  --docker-username=${NEXUS_USER} \
+  --docker-password=${NEXUS_PASS} \
+  --docker-email=admin@internal.com \
+  -n ${NAMESPACE} \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 3. Create ConfigMap to fix plugin issues
+echo "Creating plugin fix ConfigMap..."
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-plugin-fix
+  namespace: ${NAMESPACE}
+data:
+  fix-plugins.sh: |
+    #!/bin/bash
+    # Remove conflicting plugin
+    if [ -f /usr/share/falco/plugins/libcontainer.so ]; then
+      echo "Removing conflicting libcontainer.so plugin..."
+      rm -f /usr/share/falco/plugins/libcontainer.so
+    fi
+    
+    # Check for duplicate plugins
+    echo "Checking for duplicate plugins..."
+    ls -la /usr/share/falco/plugins/
+    
+    # Fix permissions
+    chmod 644 /usr/share/falco/plugins/*.so 2>/dev/null || true
+EOF
+
+# 4. Deploy Falco with fixed configuration
+echo "Deploying Falco..."
+helm upgrade --install falco ./falco \
+  --namespace ${NAMESPACE} \
+  --values falco-values-airgapped.yaml \
+  --set image.registry=${NEXUS_REGISTRY} \
+  --wait --timeout 5m
+
+echo "=== Deployment Complete ==="
+4. Alternative Solution: Manual DaemonSet
+4.1 Direct DaemonSet Deployment (Skip Helm Issues)
+yaml# falco-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco-system
+  labels:
+    app: falco
+spec:
+  selector:
+    matchLabels:
+      app: falco
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: falco
+      annotations:
+        checksum/config: "{{ .Values.configChecksum }}"
+    spec:
+      serviceAccountName: falco
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/master
+          operator: Exists
+      initContainers:
+        # Fix plugin conflict
+        - name: plugin-fix
+          image: nexus.internal.com:8443/falcosecurity/falco:0.38.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Fixing plugin conflicts..."
+              # Remove conflicting plugins
+              rm -f /host/usr/share/falco/plugins/libcontainer.so || true
+              # List remaining plugins
+              ls -la /usr/share/falco/plugins/ || true
+              echo "Plugin fix complete"
+          volumeMounts:
+            - name: plugins-install-dir
+              mountPath: /host/usr/share/falco/plugins
+          securityContext:
+            privileged: true
+      containers:
+        - name: falco
+          image: nexus.internal.com:8443/falcosecurity/falco:0.38.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - /usr/bin/falco
+            - --modern-bpf
+            - --disable-cri-async
+            - -pk
+          env:
+            - name: HOST_ROOT
+              value: /host
+            - name: SKIP_DRIVER_LOADER
+              value: "true"
+            - name: FALCO_BPF_PROBE
+              value: ""
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: dev-fs
+              mountPath: /host/dev
+              readOnly: true
+            - name: proc-fs
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys-fs
+              mountPath: /sys/module
+              readOnly: true
+            - name: boot-fs
+              mountPath: /host/boot
+              readOnly: true
+            - name: lib-modules
+              mountPath: /host/lib/modules
+              readOnly: true
+            - name: usr-fs
+              mountPath: /host/usr
+              readOnly: true
+            - name: etc-fs
+              mountPath: /host/etc
+              readOnly: true
+            - name: containerd-socket
+              mountPath: /host/run/containerd/containerd.sock
+              readOnly: false
+            - name: falco-config
+              mountPath: /etc/falco
+            - name: plugins-install-dir
+              mountPath: /usr/share/falco/plugins
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+      volumes:
+        - name: dev-fs
+          hostPath:
+            path: /dev
+        - name: proc-fs
+          hostPath:
+            path: /proc
+        - name: sys-fs
+          hostPath:
+            path: /sys/module
+        - name: boot-fs
+          hostPath:
+            path: /boot
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: usr-fs
+          hostPath:
+            path: /usr
+        - name: etc-fs
+          hostPath:
+            path: /etc
+        - name: containerd-socket
+          hostPath:
+            path: /run/containerd/containerd.sock
+        - name: falco-config
+          configMap:
+            name: falco-config
+        - name: plugins-install-dir
+          emptyDir: {}
+      imagePullSecrets:
+        - name: nexus-docker-creds
+5. Troubleshooting Plugin Issues
+5.1 Debug và Fix Script
+bash#!/bin/bash
+# debug-plugin-issue.sh
+
+# Get pod name
+POD=$(kubectl get pods -n falco-system -l app=falco -o jsonpath='{.items[0].metadata.name}')
+
+echo "=== Debugging Falco Plugin Issue ==="
+
+# 1. Check plugin directory
+echo "1. Checking plugin directory..."
+kubectl exec -n falco-system ${POD} -- ls -la /usr/share/falco/plugins/
+
+# 2. Check for duplicate plugins
+echo "2. Looking for duplicate registrations..."
+kubectl exec -n falco-system ${POD} -- find / -name "*.so" 2>/dev/null | grep -E "(container|coantainer)"
+
+# 3. Check Falco configuration
+echo "3. Checking Falco configuration..."
+kubectl exec -n falco-system ${POD} -- cat /etc/falco/falco.yaml | grep -A5 "plugins:"
+
+# 4. Fix plugin issue
+echo "4. Attempting to fix plugin issue..."
+kubectl exec -n falco-system ${POD} -- bash -c '
+  # Remove problematic plugin
+  rm -f /usr/share/falco/plugins/libcontainer.so
+  
+  # Restart Falco
+  pkill falco
+  sleep 5
+  /usr/bin/falco --modern-bpf -pk &
+'
+
+# 5. Check logs after fix
+echo "5. Checking logs after fix..."
+kubectl logs -n falco-system ${POD} --tail=50
+6. Verification
+6.1 Verify Deployment
+bash#!/bin/bash
+# verify-falco.sh
+
+echo "=== Verifying Falco Deployment ==="
+
+# Check pods
+echo "1. Pods Status:"
+kubectl get pods -n falco-system -o wide
+
+# Check driver
+echo "2. Driver Status:"
+kubectl exec -n falco-system daemonset/falco -- falco --support | grep -A5 "Driver"
+
+# Check for errors
+echo "3. Recent Errors:"
+kubectl logs -n falco-system daemonset/falco --tail=20 | grep -i error || echo "No errors found"
+
+# Test detection
+echo "4. Testing Detection:"
+kubectl exec -n falco-system daemonset/falco -- touch /bin/test_file 2>/dev/null || true
+sleep 2
+kubectl logs -n falco-system daemonset/falco --tail=10 | grep test_file || echo "Alert not found"
+
+echo "=== Verification Complete ==="
+Với configuration này, bạn sẽ bypass được plugin conflict issue. Key points:
+
+Disable falcoctl artifact management
+Use modern_ebpf cho kernel 6.11
+Remove conflicting plugins
+Deploy manually nếu Helm vẫn có issues
+plugins: # Disable conflicting plugins - name: container enabled: false bi loi
+Error: error readding config file (/etc/falco/falco.yaml) could not load pglugin config yaml-cpp error at line 68 colum 3 bad con version2:11 PMLỗi này cho thấy cấu hình plugins trong values.yaml không đúng format. Tôi sẽ sửa lại configuration cho bạn.
+1. Fixed Values Configuration
+1.1 Correct Values.yaml (Không có plugin config trong values)
+yaml# falco-values-fixed.yaml
+# Fixed configuration cho air-gapped environment
+
+# Image configuration
+image:
+  registry: nexus.internal.com:8443
+  repository: falcosecurity/falco
+  tag: "0.38.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: nexus-docker-creds
+
+# Disable falcoctl trong air-gapped
+falcoctl:
+  artifact:
+    install:
+      enabled: false
+    follow:
+      enabled: false
+
+# Driver configuration
+driver:
+  enabled: true
+  kind: modern_ebpf  # Best cho kernel 6.11
+  loader:
+    enabled: false  # Disable loader trong air-gapped
+  
+  # Modern eBPF settings
+  modern_ebpf:
+    bundledProbe: true
+
+# Falco base configuration
+falco:
+  # Disable plugins loading to avoid conflicts
+  plugins: []  # Empty array, không phải object với name/enabled
+  
+  # Rules files
+  rules_file:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/k8s_audit_rules.yaml
+  
+  # JSON output
+  json_output: true
+  json_include_output_property: true
+  
+  # Log settings
+  log_stderr: true
+  log_syslog: false
+  log_level: info
+  
+  # Performance
+  syscall_event_drops:
+    threshold: 0.1
+    actions:
+      - log
+      - alert
+  
+  # Buffer configuration
+  syscall_buf_size_preset: 8
+
+# Container runtime
+containerRuntime:
+  implementation: containerd
+  containerd:
+    socket: /run/containerd/containerd.sock
+
+# Collectors configuration
+collectors:
+  enabled: true
+  docker:
+    enabled: false
+  containerd:
+    enabled: true
+    socket: /run/containerd/containerd.sock
+  crio:
+    enabled: false
+  kubernetes:
+    enabled: true
+    apiAuth: /var/run/secrets/kubernetes.io/serviceaccount/token
+    apiUrl: "https://kubernetes.default"
+    enableNodeFilter: true
+
+# Tolerations
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+    operator: Exists
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+    operator: Exists
+
+# Resources
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+
+# Service Account
+serviceAccount:
+  create: true
+  name: ""
+
+# RBAC
+rbac:
+  create: true
+
+# Pod Security
+podSecurityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  fsGroup: 0
+  privileged: true
+
+securityContext:
+  privileged: true
+  allowPrivilegeEscalation: true
+  readOnlyRootFilesystem: false
+  runAsNonRoot: false
+  runAsUser: 0
+  capabilities:
+    drop: []
+    add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
+
+# Metrics
+metrics:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 8765
+
+# Priority Class
+priorityClassName: system-node-critical
+
+# Extra environment variables
+extraEnv:
+  - name: SKIP_DRIVER_LOADER
+    value: "true"
+
+# Update Strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# Custom Rules (optional)
+customRules:
+  custom-rules.yaml: |-
+    - rule: Shell in container
+      desc: Detect shell spawned in container
+      condition: >
+        container.id != host and 
+        proc.name in (bash, sh, zsh) and
+        spawned_process
+      output: >
+        Shell spawned in container 
+        (user=%user.name container=%container.name 
+         shell=%proc.name parent=%proc.pname)
+      priority: WARNING
+      tags: [container, shell]
+2. ConfigMap để Fix Plugin Issue
+2.1 Tạo ConfigMap riêng cho Falco Config
+yaml# falco-config-override.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config-override
+  namespace: falco-system
+data:
+  falco.yaml: |
+    # Falco configuration with plugin fix
+    
+    # Rules files
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/k8s_audit_rules.yaml
+      - /etc/falco/rules.d
+    
+    # KHÔNG có plugins section để tránh conflict
+    # plugins: []  # Comment out hoàn toàn
+    
+    # JSON output
+    json_output: true
+    json_include_output_property: true
+    json_include_tags_property: true
+    
+    # Logging
+    log_stderr: true
+    log_syslog: false
+    log_level: info
+    
+    # Outputs
+    stdout_output:
+      enabled: true
+    
+    file_output:
+      enabled: false
+      keep_alive: false
+      filename: /tmp/falco_events.txt
+    
+    syslog_output:
+      enabled: false
+    
+    # Performance settings
+    syscall_event_drops:
+      threshold: 0.1
+      actions:
+        - log
+        - alert
+      rate: 0.03
+      max_burst: 1
+    
+    syscall_event_timeouts:
+      max_consecutives: 1000
+    
+    syscall_buf_size_preset: 8
+    
+    # Output settings
+    output_timeout: 2000
+    outputs_rate: 1
+    outputs_max_burst: 1000
+    
+    # Modern BPF settings
+    modern_bpf:
+      cpus_for_each_syscall_buffer: 2
+    
+    # Metadata settings
+    metadata_download:
+      max_mb: 100
+      chunk_wait_us: 1000
+      watch_freq_sec: 1
+    
+    # Priority
+    priority: debug
+    
+    # Buffered outputs
+    buffered_outputs: false
+    
+    # Time format
+    time_format_iso_8601: false
+    
+    # gRPC disabled
+    grpc:
+      enabled: false
+    
+    grpc_output:
+      enabled: false
+3. Deploy Script với Workaround
+3.1 Complete Deploy Script
+bash#!/bin/bash
+# deploy-falco-fixed.sh
+
+set -e
+
+NAMESPACE="falco-system"
+NEXUS_REGISTRY="nexus.internal.com:8443"
+
+echo "=== Deploying Falco with Plugin Fix ==="
+
+# 1. Create namespace
+kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+# 2. Apply config override first
+kubectl apply -f falco-config-override.yaml
+
+# 3. Deploy Falco với minimal config
+helm upgrade --install falco ./falco \
+  --namespace ${NAMESPACE} \
+  --values falco-values-fixed.yaml \
+  --set falco.grpc.enabled=false \
+  --set falco.grpc_output.enabled=false \
+  --set falcoctl.artifact.install.enabled=false \
+  --set falcoctl.artifact.follow.enabled=false \
+  --set driver.kind=modern_ebpf \
+  --set driver.loader.enabled=false \
+  --wait --timeout 5m
+
+echo "=== Deployment Complete ==="
+4. Alternative: Direct Manifest (Skip Helm)
+4.1 Complete Falco DaemonSet Manifest
+yaml# falco-complete.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: falco-system
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falco
+  namespace: falco-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: falco
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "namespaces", "services", "replicationcontrollers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: falco
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: falco
+subjects:
+  - kind: ServiceAccount
+    name: falco
+    namespace: falco-system
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config
+  namespace: falco-system
+data:
+  falco.yaml: |
+    # Minimal working config
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/k8s_audit_rules.yaml
+    
+    json_output: true
+    json_include_output_property: true
+    
+    log_stderr: true
+    log_syslog: false
+    log_level: info
+    
+    stdout_output:
+      enabled: true
+    
+    syscall_event_drops:
+      threshold: 0.1
+      actions:
+        - log
+        - alert
+    
+    syscall_buf_size_preset: 8
+    
+    modern_bpf:
+      cpus_for_each_syscall_buffer: 2
+    
+    priority: debug
+    buffered_outputs: false
+    time_format_iso_8601: false
+    
+    grpc:
+      enabled: false
+    grpc_output:
+      enabled: false
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco-system
+spec:
+  selector:
+    matchLabels:
+      app: falco
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: falco
+    spec:
+      serviceAccountName: falco
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      containers:
+        - name: falco
+          image: nexus.internal.com:8443/falcosecurity/falco:0.38.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/bin/falco
+            - --modern-bpf
+            - -pk
+          env:
+            - name: HOST_ROOT
+              value: /host
+            - name: SKIP_DRIVER_LOADER  
+              value: "true"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: dev-fs
+              mountPath: /host/dev
+            - name: proc-fs
+              mountPath: /host/proc
+            - name: boot-fs
+              mountPath: /host/boot
+            - name: lib-modules
+              mountPath: /host/lib/modules
+            - name: usr-fs
+              mountPath: /host/usr
+            - name: etc-fs
+              mountPath: /host/etc
+            - name: containerd-socket
+              mountPath: /run/containerd/containerd.sock
+            - name: falco-config
+              mountPath: /etc/falco
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+      volumes:
+        - name: dev-fs
+          hostPath:
+            path: /dev
+        - name: proc-fs
+          hostPath:
+            path: /proc
+        - name: boot-fs
+          hostPath:
+            path: /boot
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: usr-fs
+          hostPath:
+            path: /usr
+        - name: etc-fs
+          hostPath:
+            path: /etc
+        - name: containerd-socket
+          hostPath:
+            path: /run/containerd/containerd.sock
+        - name: falco-config
+          configMap:
+            name: falco-config
+      imagePullSecrets:
+        - name: nexus-docker-creds
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: falco-metrics
+  namespace: falco-system
+spec:
+  selector:
+    app: falco
+  ports:
+    - name: metrics
+      port: 8765
+      targetPort: 8765
+      protocol: TCP
+4.2 Deploy Direct Manifest
+bash#!/bin/bash
+# deploy-direct.sh
+
+# Apply manifest
+kubectl apply -f falco-complete.yaml
+
+# Wait for pods
+kubectl wait --for=condition=ready pod -l app=falco -n falco-system --timeout=300s
+
+# Check status
+kubectl get pods -n falco-system
+5. Verification và Troubleshooting
+5.1 Verify Script
+bash#!/bin/bash
+# verify-deployment.sh
+
+echo "=== Falco Deployment Verification ==="
+
+# 1. Check pods
+echo "1. Pod Status:"
+kubectl get pods -n falco-system -o wide
+
+# 2. Check logs for errors
+echo "2. Checking for errors:"
+kubectl logs -n falco-system daemonset/falco --tail=20 | grep -iE "(error|fail|cannot)" || echo "No errors"
+
+# 3. Check driver
+echo "3. Driver status:"
+kubectl exec -n falco-system daemonset/falco -- ls -la /sys/fs/bpf/ 2>/dev/null || echo "BPF not mounted"
+
+# 4. Test alert
+echo "4. Testing detection:"
+kubectl run test-pod --image=alpine --rm -it --restart=Never -- sh -c "echo test > /etc/test" || true
+sleep 3
+kubectl logs -n falco-system daemonset/falco --tail=10
+
+echo "=== Verification Complete ==="
+5.2 Debug Plugin Issue
+bash#!/bin/bash  
+# debug-plugin.sh
+
+POD=$(kubectl get pods -n falco-system -o jsonpath='{.items[0].metadata.name}')
+
+# Check what plugins are present
+echo "Checking plugins directory:"
+kubectl exec -n falco-system ${POD} -- ls -la /usr/share/falco/plugins/ 2>/dev/null || echo "No plugins directory"
+
+# Check falco config
+echo "Checking falco config:"
+kubectl exec -n falco-system ${POD} -- grep -A5 "plugins:" /etc/falco/falco.yaml || echo "No plugins config"
+
+# Remove problematic files if exist
+kubectl exec -n falco-system ${POD} -- rm -f /usr/share/falco/plugins/libcontainer.so 2>/dev/null || true
+Key points để fix:
+
+KHÔNG dùng plugins: config với structure name/enabled
+Dùng empty array plugins: [] hoặc không có plugins section
+Dùng modern_ebpf cho kernel 6.11
+Disable falcoctl artifact management
+Deploy trực tiếp qua manifest nếu Helm vẫn có issues
