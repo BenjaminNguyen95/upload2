@@ -1,0 +1,13 @@
+curl -X POST http://<falco-ip>:9765/k8s-audit \
+  -H "Content-Type: application/json" \
+  -d '{
+        "kind":"Event",
+        "apiVersion":"audit.k8s.io/v1",
+        "level":"Metadata",
+        "stage":"ResponseComplete",
+        "requestURI":"/api/v1/namespaces/default/pods",
+        "verb":"create",
+        "user":{"username":"admin"},
+        "objectRef":{"resource":"pods","namespace":"default","name":"pod-test"},
+        "responseStatus":{"code":201}
+      }'
