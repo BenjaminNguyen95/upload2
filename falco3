@@ -1,0 +1,370 @@
+Falco hoạt động như thế nào?
+Falco thu thập các sự kiện (events) từ một hoặc nhiều source và so sánh từng sự kiện này với một tập luật (có sẵn và có thể tùy chỉnh) để phát hiện các hành vi bất hường. Ví dụ, đối với system call (syscalls), các events sẽ được driver của Falco xử lý để thu thập.
+
+Sau khi một hoặc nhiều events khớp với tập luật, các cảnh báo này sẽ được chuyển tiếp tới nhiều nguồn khác nhau (syslog, stdout, HTTPS, và gRPC endpoints) hoặc thông qua Falcosidekick, một trong những công cụ/thành phần có sẵn trong Falco, cho phép tích hợp với các ứng dụng hoặc dịch vụ khác (slack, email, v.v…)
+
+
+Cách thức triển khai Falco
+Bên cạnh việc cấu hình trên K8S, Falco cũng cho phép cài đặt trên môi trường host hoặc cài đặt thông qua docker. Ở phạm vi bài viết, chúng tôi chỉ giới thiệu cách thức cài đặt trên môi trường K8s. Cách thức cài đặt trên host và thông qua docker bạn đọc có thể tham khảo thêm trên trang chủ của Falco.
+
+Trước khi cài đặt Falco, hãy đảm bảo đã cấu hình cài đặt môi trường K8s và các công cụ hỗ trợ liên quan. Đơn giản và dễ cài đặt, bạn đọc có thể cài đặt K3S làm môi trường để thử nghiệm và thực hành, cách thức cài đặt tham khảo tại đây.
+
+Bài viết sẽ cài đặt Falco thông qua Heml (package manager) với chế độ DaemonSet, việc triển khai theo chế độ này sẽ thêm Falco vào mỗi node trong cluster.Để cài đặt Falco trên môi trường K8S, người dùng hãy đảm bảo Helm đang sử dụng phiên bản mới nhất
+
+Cài đặt kernel headers
+Trước khi thực hiện cài đặt Falco trong Kubernetes cluster, chúng ta sẽ thực hiện kiểm tra phiên bản của kernel sử dụng trong nodes có được hỗ trợ hay không. Việc kiểm tra này nhằm cài đặt kernel header để tương thích với các driver mà Falco sử dụng.
+
+apt search linux-headers-$(uname -r)
+apt-get -y install linux-headers-$(uname -r)
+apt search linux-headers-$(uname -r)
+
+Cài falco qua helm chart
+Trước khi cài đặt, thêm falcosecurity charts repository sử dụng câu lệnh sau:
+
+helm repo add falcosecurity https://falcosecurity.github.io/charts
+helm repo update
+Thực hiện tạo namespace cho Falco và cài đặt Falco chart thông qua các câu lệnh dưới đây:
+
+kubectl create ns falco
+helm install falco \
+-n falco \
+--version 2.4.2 \
+--set tty=true \
+--set collectors.containerd.enabled=true \
+--set collectors.containerd.socket=/run/k3s/containerd/containerd.sock \
+falcosecurity/falco
+
+Lưu ý: Ví dụ trên mình đang sử dụng môi trường k8s containerd, nếu bạn sử dụng docker cần thay đổi socket cho phù hợp.
+
+Sau một vài phút, các phiên bản Falco sẽ chạy trên tất cả các node. Do không chỉ định driver cụ thể, theo mặc định quá trình cài đặt sẽ sử dụng kernel module.
+
+Trạng thái của Falco có thể được kiểm tra thông qua kubectl
+
+
+Test Falco
+Chúng ta sẽ thử nghiệm Falco với một use case cơ bản, kẻ tấn công thu thập thông tin nhạy cảm trên hệ thống, trong trường hợp này là tìm kiếm SSH private key trong tệp tin id_rsa. Với thông tin SSH private key này, kẻ tấn công có thể thực hiện xác thực đăng nhập SSH thông qua key.
+
+Thực hiện test case, chúng ta thu được kết quả như hình dưới đây, hành vi tìm kiếm kiếm file id_rsa đã trigger rule của Falco.
+
+
+Có một vài điểm quan trọng sau cần để ý trong quá trình triển khai:
+
+Trước khi cài đặt, người dùng nên kiểm tra phiên bản kernel hiện có để đảm bảo tính tương thích với driver của Falco hay không, do driver sẽ là cốt lõi chính để phân tích, xử lý và chuyển các sự kiện tới userspace. Nếu các driver không tương thích với kernel, quá trình cài đặt Falco sẽ phát sinh lỗi (thiếu kernel image, CrashLoopBackOff, v.v…). Hiện tại Falco hỗ trợ 3 loại driver bao gồm kernel, EBF probe và modern EBF probe, với kernel module, đây là tùy chọn mặc định, modern EBF probe có một ưu điểm là đã được nhúng sẵn trong Falco mà không cần cài đặt hoặc tải xuống, miễn là kernel trên hệ thống có phiên bản lớn hơn hoặc bằng 5.8, driver sẽ tự động được inject. Cuối cùng là EBF probe, driver này có thể cung cấp tính tương thích tốt hơn do có thể tương thích với một số phiên bản kernel thấp. Chi tiết hơn về các driver, bạn đọc có thể tham khảo thêm tại đây
+Cách thức dễ nhất để triển khai Falco trên K8s là sử dụng Heml với các cấu hình tùy chỉnh. Falco cũng có thể cài đặt thử công bằng cách tự định nghĩa các đôi tượng (object) trong file YAML
+Khi cập nhật Falco, nếu hệ thống sử dụng kernel module, người dùng nên thực hiện gỡ bỏ kernel module có tên falco thông qua command rmmod falco để tránh phát sinh các vấn đề khi câp nhât.
+Khi Falco thay đổi hoặc release các tính năng mới, new chart sẽ được released. Để tránh việc có những thay đổi không mong muốn, người dùng nên chỉ định một phiên bản cụ thể, ngay cả trong quá trình cài đặt (khi sử dụng helm install và helm upgrade)
+Nếu cần thực hiện thay đổi thông qua Heml, sử dụng option –reuse-values nhằm đảm bảo các cấu hình ban đầu trong chart đã set trước đó không bị thay đổi trong quá trình nâng cấp. Tuy nhiên options này sẽ không giữ nguyên giá trị của tùy chọn version nếu nó được chỉ định trong lần cài đặt ban đầu -> mỗi lần update người dùng nên chỉ định giá tri cho option version.
+Falco Event Sources
+Ở phần trước, bạn đọc đã được giới thiệu về cách thức cấu hình để giám sát các lời gọi hệ thống. Tuy nhiên, Falco không chỉ dừng lại ở việc giám sát các lời gọi hệ thống (thực thi câu lệnh, ssh…) mà còn hỗ trợ cho việc thu thập các sự kiện (events) từ nguồn Kubernetes Audit Logs hay đa dạng các nguồn khác như AWS CloudTrail, Okta, thông qua falco plugin. Theo cách này, người dùng cũng có thể tự tạo được plugin của riêng mình để thu thập các nguồn events khác.
+
+
+Với nguồn sự kiện từ Audit Logs của K8S, hệ thống giám sát sẽ có thu thập được các sự kiện, các tác vụ tác động đến cluster giúp phát hiện các hành vi, hoạt động bất thường trong cluster. Để thu thập các sự kiện này, K8S cluster cần enable audit logs và cấu hình gửi audit logs này tới plugin k8saudit.
+
+Chúng ta sẽ thực hiện cấu hình lấy log source từ K8S audit logs trên môi trường K3S bằng một loại các hướng dẫn dưới đây:
+
+Cấu hình enable K8S audit log
+Tạo một file có tên audit.log và phân quyền cho file:
+
+mkdir -p /var/lib/rancher/audit
+touch /var/lib/rancher/audit/audit.log
+chmod 777 /var/lib/rancher/audit/audit.log
+Audit policy định nghĩa và quy định các mức độ cho quá trình ghi lạ các sự kiện và thông tin liên quan. Theo mặc định, Falco cũng cũng cung cấp các chính sách này, download file và sao chép tới đúng thư mục của file audit.log
+
+wget https://raw.githubusercontent.com/falcosecurity/contrib/main/examples/k8s_audit_config/audit-policy.yaml
+cp audit-policy.yaml /var/lib/rancher/audit/
+Tạo cấu hình webhook cho api server và sao chép tới cùng thư mục với audit.log
+
+cat << EOF | sudo tee /var/lib/rancher/audit/webhook-config.yaml
+apiVersion: v1
+kind: Config
+clusters:
+– name: falco
+cluster:
+server: http://localhost:30007/k8s-audit
+contexts:
+– context:
+cluster: falco
+user: ""
+name: default-context
+current-context: default-context
+preferences: {}
+users: [] EOF
+Chỉ định các tham số audit-log-path, audit-policy-file, webhook-config và restart lại kube-apiserver.
+
+Cấu hình K8S với k8s-audit events
+Falco cũng cung cấp sẵn cấu hình thu thập sự kiện k8s-audit trong file falco.yaml.
+
+Tải xuống và lưu vào tệp tin values.yaml sử dụng curl:
+
+curl https://raw.githubusercontent.com/falcosecurity/charts/falco-2.4.2/falco/values-k8saudit.yaml -o values.yaml
+
+Trong trường hợp trên, file cấu hình đang không thu thập các sự kiện từ nguồn log source là syscalls. Tuy nhiên, Falco cho phép hoạt động đồng thời với nhiều nguồn khác nhau, người dùng có thể sử dụng cùng một phiên bản Falco để thu thập đồng thời từ cả 2 nguồn k8s-audit plugin và syscalls.
+
+Ở ví dụ này, chúng tôi cấu hình cho các alert được hiển thị trên falcosidekick, một portal cho phép hiển thị các cảnh báo (falcosidekick sẽ được đề cập rõ ràng hơn ở các phần sau). Sau đó sử dụng Heml để triển khai Falco.
+
+helm install falco \
+--version 2.4.2 \
+--create-namespace \
+--namespace falco \
+--set tty=true \
+--set falcosidekick.enabled=true \
+--set falcosidekick.webui.enabled=true \
+--values=values.yaml \
+falcosecurity/falco
+-----
+
+Các thành phần cơ bản trong Falco rule
+Các tập luật của Falco được triển khai mặc định trong các file như sau:
+
+Default rule: được lưu trữ tại đường dẫn /etc/falco/falco_rules.yaml, các rule này không thể chỉnh sửa và sẽ được thay thế khi cập nhật các phiên bản mới của Falco
+Local rules: được lưu trữ tại đường dẫn /etc/falco/falco_rules.local.yaml, cho phép thêm và chỉnh sửa các tập luật và không bị thay thế khi cập nhật các phiên bản mới của Falco
+Falco rule file là một file định dạng YAML bao gồm 3 thành phần chính sau:
+
+rule: Tập các quy tắc với một hoặc nhiều điều kiện nhằm kiểm tra các sự kiện và sinh ra các cảnh báo nếu các sự kiện này trùng khớp với điều kiện
+marco: các điều kiện có thể được sử dụng lại trong các quy tắc hoặc các marco khác
+list: danh sách các items có thể đặt trong quy tắc, marcos hoặc những lists khác
+Một luật trong Falco khi tạo bắt buộc phải chứa các trường sau:
+
+rule: Tên của luật được mô tả ngắn gọn, đặc trưng cho một luật nào đó.
+condition: Một hoặc nhiều biểu thức được áp dụng cho các sự kiện để kiểm tra xem chúng có khớp với quy tắc hay không.
+desc: Mô tả về về quy tắc phát hiện.
+output: Các cảnh báo nếu các sự kiện trùng khớp với các điều kiện.
+priority: Mức độ nghiêm trọng của sự kiện (ví dụ:critical, error, hoặc warning
+Ví dụ dưới đây là một tập luật cơ bản phát hiện shell được khởi tạo:
+
+– rule: shell_in_container
+  desc: notice shell activity within a container
+  condition: container.id != host and proc.name = bash
+  output: shell in a container (user=%user.name container_name=%container.name)
+priority: warning
+  tags: [shell, container]
+Theo mặc định, Falco cung cấp các tập luật sau để phát hiện tấn công với các trạng thái enable hoặc disable các tập luật này có thể xem tại đây, về cơ bản các tập luật nhằm:
+
+Phát hiện và cảnh báo đặc quyền liên quan tới nâng quyền trong containers.
+Phát hiện và cảnh báo các hành vi liên quan tới thay đổi namespace Kubernetes bằng cách sử dụng các công cụ như setns.
+Phát hiện hành vi đọc/ghi vào các thư mục như /etc, /usr/bin, /usr/sbin, …
+Phát hiện việc tạo các liên kết symlinks.
+Phát hiện hành vi thay đổi quyền sở hữu và quyền truy cập (Ownership và Mode)
+Phát hiện kết nối bất thường (C&C) hoặc biến đổi socket.
+Phát hiện các tiến trình được tạo ra bằng cách sử dụng execve.
+Phát hiện các hành vi thực thi shell dùng sh, bash, csh, zsh, …
+Phát hiện hành vi thực thi SSH dùng ssh, scp, sftp, …
+Phát hiện hành vi thực thi coreutils (touch, whoami, curl,…)
+Phát hiện hay đổi thông tin login (từ các tệp thực thi lên quan đến đăng nhập hệ thống).
+Phát hiện và cảnh báo việc sửa đổi shadowutil hoặc passwd qua thực thi shadowconfig, pwck, chpasswd, getpasswd, change, useradd, …
+
+Trên hình là một số rule mặc định của Falco, đi vào chi tiết về một rule cụ thể: Disallowed SSH Connection. Như đã trình bày  trước đó, rule ở hình ảnh dưới đây bao gồm các trường, ngoại trừ trường Tags và Maturity, các trường còn lại là bắt buộc.
+
+
+Nói thêm về trường Maturity, trạng thái hiện thái của rule đang được đặt là deprecated. Ngoài ra Maturity còn có 3 trạng thái khác là stable, incubating và sandbox. Trong khi viết rule, các trạng thái này có thể để trong trường Tags. Các trạng thái này hiểu như sau:
+
+stable: Các rule đã được các chuyên gia kiểm tra một các kỹ lưỡng, áp dụng được cho tương đối  các hệ thống
+incubating: Các rule đảm bảo mức độ ổn định và được sử dụng cho các trường hợp cụ thể hơn, phù hợp với từng hệ thống
+sandbox: Các rule đang trong quá trình thử nghiệm, mức độ ổn định cũng như tính hữu ích vẫn đang được đánh giá
+deprecated: Các rule này sau khi đánh giá lại được cho là ít sử dụng. Người dùng cần tự đánh giá và sử dụng các rule này cho phù hợp với hệ thống
+Một trong những kiến thức khác cần nắm trong quá trình viết rule là các trường sự kiện, kiểu dữ liệu và các toán tử. Các trường sự kiện  trong Falco tương đối khá đa dạng, mở rộng và hỗ trợ tương đối nguồn logs source. Tuy nhiên không phải các trường đều có sẵn cho tất cả các sự kiện, ví dụ một số các trường proc.***, thread.*** liên quan đến tiến trình, threads, container.*** liên quan đến container và nhiều trường dữ liệu khác nữa. Bạn có thể tham khảo thêm tại đây trong để tìm và sử dụng các trường phù hợp trong quá trình viết rule. Các toán tử trong Falco bao gồm các toán tử quan hệ (=, !=, contains, icontains, v.v…) và toán tử logic (and, or hoặc not).
+
+Chúng ta đã nắm được một số kiến thức cơ bản phục vụ cho quá trình viết rule, phần tiếp theo sẽ giới thiệu cách thức viết một rule và tùy chỉnh để rule trông gọn gàng, thuận lợi hơn trong quá trình maintain.
+
+Viết Falco rule
+Người dùng có thể mở rộng tập các quy tắc của Falco bằng cách thêm các quy tắc do người dùng tự viết. Tệp tin my_rules.yaml đã có sẵn cú pháp cho phép thực hiện điều này. Bên dưới từ khóa my_rules, thêm một rule mới nhằm phát hiện việc thực thi của tiến trình mount.
+
+customRules:
+  my_rules: |-
+    – rule: Unauthorized mount process
+      desc: There is an unauthorized mount process running
+      condition: evt.type=execve and proc.name=mount
+      output: Unauthorized process (%proc.cmdline) running
+      priority: WARNING
+      tags: [process, mount]
+Sau khi đã thêm rule, chạy lại Falco sử dụng Helm
+
+helm upgrade falco falcosecurity/falco -n falco --reuse-values --version 2.4.2 -f my_rules.yaml
+
+Thử lại với câu lệnh mount –version để kiểm tra xem rule đã được trigger hay chưa
+
+
+Ở trên chúng ta vừa thử viết một rule,  theo cách này chúng ta có thể tự tạo được nhiều rule khác. Tuy nhiên, với rule ở ví dụ trên, khi muốn dùng lại điều kiện này một rule nào đó khác liên quan đến tiến trình mount, chúng ta sẽ sao chép lại điều kiện evt.type=execve and proc.name=mount nhiều lần. Đối với số lượng rule lớn, việc thực hiện này sẽ mất tương đối thời gian, cách viết rule cơ bản như trên cũng khiến quá trình maintain và quá trình chỉnh sửa rule trở nên khó khăn hơn về sau.
+
+Macro và Lists
+Để khiến các rules được viết trở nên dễ nhìn dễ đọc và dễ dàng theo dõi, Falco giới thiệu 2 khái niệm hỗ trợ trong quá trình viết rule: Macro và Lists.
+
+Đầu tiên với marco: để giảm thiểu việc sử dụng lại các điều kiện (hoặc một phần) nhiều lần trong một tệp rule. Macro cho phép người dùng khai báo các điều kiện đó và sử dụng lại ở bất cứ đâu mà người dùng muốn. Nhìn chung việc sử dụng marco có 3 ưu điểm chính: cho phép sử dụng lại, tránh viết các điều kiện dài và dễ hiểu. Marco được định nghĩa bởi 2 thành phần: Tên của marco (macro) và điều kiện (condition).
+
+Sử dụng lại tập luật phát hiện tiến trình mount ở ví dụ trên, sử dụng marco như sau:
+
+customRules:
+  my_rules: |-
+    – rule: Unauthorized mount process
+      desc: There is an unauthorized mount process running
+      condition: mount_process
+      output: Unauthorized process (%proc.cmdline) running
+      priority: WARNING
+      tags: [process, mount]
+
+    – macro: mount_process
+      condition: evt.type=execve and proc.name=mount
+Update rule thông qua Helm và thử lại test case thông qua câu lệnh mount –version xem rule vừa viết đúng hay chưa? Hình ảnh bên dưới cho thấy Pod chạy lại không phát sinh lỗi và cũng trigger cảnh báo:
+
+
+Tiếp theo đến với lists: Danh sách là tập các items mà người dùng có thể thêm vào các rule, macro hoặc trong một danh sách khác. Danh sách bao gồm 2 trường tên của danh sách (list) và các giá trị (items – được đặt trong ngoặc vuông và ngăn cách nhau bằng dấu phẩy).
+
+Xét ví dụ dưới đây, các list lồng nhau và cuối cùng đặt một list trong một marco:
+
+– list: shell_binaries
+  items: [bash, csh, ksh, sh, tcsh, zsh, dash]
+
+– list: userexec_binaries
+  items: [sudo, su]
+
+– list: known_binaries
+  items: [shell_binaries, userexec_binaries]
+
+– macro: safe_procs
+  condition: proc.name in (known_binaries)
+Lưu ý: Không thể sử dụng lists như một biểu thức trong condition. Ví dụ condition: proc.name in some_list, đây là một cách viết không hợp lệ.
+
+Sử dụng lại ví dụ về việc phát hiện phát hiện tiến trình mount, chúng ta sẽ xây dựng tập luật giám sát thêm 2 process mới là sudo và ls, sử dụng đồng thời cả marco và list. Tương tự như các ví dụ trước, sau khi viết lại rule, chúng ta cũng thực hiện cập nhật rule sử dụng Helm và xem lại log xem rule đã được trigger hay chưa để xác nhận việc viết rule là chính xác.
+
+customRules:
+  my_rules: |-
+    – rule: Unauthorized mount process
+      desc: There is an unauthorized mount process running
+      condition: mount_process
+      output: Unauthorized process (%proc.cmdline) running
+      priority: WARNING
+      tags: [process, mount]
+
+    – macro: mount_process
+      condition: evt.type=execve and proc.name in (forbidden_processes)
+
+    – list: forbidden_processes
+      items: [mount, sudo, su]
+
+Sau khi đã nắm được cách thức sử dụng marco và lists trong quá trình xây dựng rule. Bạn đọc có thể có những thắc mắc, liệu người viết rule có thể tác động lên những marco, lists hay thập chí là rule hay không? Câu trả lời là có, Falco cũng hỗ trợ cho người dùng mở rộng những thành phần này với tính năng append, việc sử dụng append có 2 mục đích chính:
+
+Giúp điều chỉnh các rule noise, các rule dễ sinh ra các tình trạng False positives.
+Các điều chỉnh này giúp cho người xây dựng rule dễ điều chỉnh để phù hợp với các hệ thống cũng như nghiệp vụ của từng đơn vị
+Append
+Để có thể append, chúng ta thực hiện tuần tự các công việc sau:
+
+Tạo một thành phần với tên trùng với tên của marco, lists hoặc rule
+Thêm từ khóa append và đặt trạng thái là true
+Thêm các thành phần item (đối với lists) hoặc điều kiện (đối với marco hoặc rule)
+Khi thực hiện thêm các thành phần, đối với lists, các items sẽ được thêm vào cuối của list, đối với rule hoặc macro, các chuỗi này sẽ được thêm vào trường condition. Dưới đây là ví dụ về việc thêm các items vào list shell_libraries.
+
+– list: shell_libraries
+  append: true
+  items: [pdksh, fish]
+Chúng ta xem xét một tập luật của Falco có tên Create Symlink Over Sensitive Files, rule phát hiện hành vi tạo symlinks ở một số tệp tin hoặc thư mục nhạy cảm.
+
+
+Trong trường hợp người dùng muốn thêm các đường dẫn khác để phục vụ giám sát, ví dụ như /mnt, chúng ta sẽ sử dụng sử dụng từ khóa append để thực hiện việc thêm từ khóa này vào một list.
+
+
+Sau đó chạy lại pod và kiểm tra kết quả:
+
+
+Override
+Cũng liên quan đến marco, trong Falco có một số rule gọi là placeholder, các rule này cần các điều kiện và thông tin cụ thể để người dùng có thể viết rule cho phù hợp, cho phép ghi đè các rule vào marco cùng tên. Để sử dụng người dùng cũng cần thực hiện enable rule.
+
+Để hiểu rõ hơn về rule placeholder, chúng ta xét ví dụ dưới đây:
+
+– macro: ssh_port
+  condition: fd.sport=22
+
+– macro: allowed_ssh_hosts
+  condition: ssh_port
+
+– rule: Disallowed SSH Connection
+  desc: Detect any new ssh connection to a host other than those in an allowed group of hosts
+  condition: (inbound_outbound) and ssh_port and not allowed_ssh_hosts
+  enabled: false
+  output: Disallowed SSH Connection (command=%proc.cmdline pid=%proc.pid connection=%fd.name user=%user.name user_loginuid=%user.loginuid container_id=%container.id image=%container.image.repository)
+  priority: NOTICE
+  tags: [network, mitre_remote_service]
+Theo mặc định, rule trên được đặt ở trạng thái disable enabled: false, bạn đọc hãy để ý đến marco allowed_ssh_hosts, macro này có điều kiện là macro ssh_port, như vậy điều kiện ở rule sẽ tương đương ssh_port and not ssh_port, với quy tắc này, không có bất kỳ sự kiện nào có thể trigger được rule này, và cần người dùng chỉnh sửa cho phù hợp như hình ảnh bên dưới. Bạn đọc có thể tự chỉnh sửa lại rule này và re-run lại Falco để xem kết quả.
+
+
+Trước khi tiếp tục với việc giới thiệu các kiến thức liên quan trong quá trình viết rule, chúng ta sẽ đi tới khái niệm dễ gây nhầm lẫn, khiến việc thực hiện cập nhật các rule mới thông qua Helm sẽ khiến pod Falco phát sinh lỗi. Người dùng tránh việc nhầm lẫn giữa Falco engine và Falco version.
+
+Giá trị của Falco engine có thể tăng khi có những thay đổi liên quan đến việc tăng tính tương thích với các định dạng file rules hay các trường hay toán tử mởi được thêm vào. Khi viết rule, Falco engine sẽ được khai báo trong trường require_engine_version, nếu người dùng cấu hình một số lớn hơn phiên bản Falco engine đang được Falco sử dụng, pod sẽ phát sinh lỗi
+
+
+Như trên ảnh, engine_version đang có giá trị là 15, chúng ta thử thực hiện update rule mới và chỉ định giá trị require_engine_version là 16, chạy lại pod, như ở hình ảnh dưới, pod đã phát sinh lỗi CrashLoopBackOff. Để khắc phục vấn đề này, chúng ta cần khai báo engine version nhỏ hơn giá trị 15.
+
+Enable/disable default rules
+Falco cho phép disable hoặc enable các rule mặc định theo các cách thức sau:
+
+Thông qua marco (Existing Macros)
+Thông qua các tham số (Falco parameters)
+Thông qua định nghĩa rule (Custom Rule Definition)
+Existing Macros
+Trong Falco, có một số rule mặc định có marco theo định dạng user_known_***, các marco này có thể đặt ở hai trạng thái (never_true) hoặc (always_true) tương đương với enable và disable. Ví dụ như sau:
+
+
+Falco parameters
+Falco cung cấp các tham số cho phép giới hạn các default rule nào đươc phép được enable và quy tắc nào không được phép
+
+-D <substring>: Disable mọi rule có tên là chuỗi được chỉ định (cho phép chỉ định nhiều lần)
+-T <tag>: Disable mọi rule có chứa thẻ (tag) được chỉ định (cho phép chỉ định nhiều lần)
+-t <tag>: Chỉ chạy những rule có chứa thẻ (tag) được chỉ định (cho phép chỉ định nhiều lần)
+Với Helm, sử dụng cú pháp như sau: –set “extra.args={-D,Write below root}”
+
+Custom Rule Definition
+Trong một vài trường hợp marco user_known_* không có sẵn, người dùng có thể sử dụng trường enabled được định nghĩa sẵn trong rule
+
+Rule exceptions
+Mặc dù bộ rule của Falco là hữu ích, giúp phát hiện nhiều cách thức tấn công. Tuy nhiên, đối với các hệ thống thật, tùy thuộc vào nghiệp vụ của từng đơn vị vẫn có thể xảy ra những exceptions. Các ngoại lệ này là có thể là một daemon nào đó cần lập lịch (cron jobs) để thực hiện các công việc kiểm tra hệ thống định kỳ, hay một chương trình đã được xác nhận là an toàn cần đọc ghi dữ liệu từ đường dẫn /bin,…
+
+Những hành vi này, chúng ta có thể whitelist để tránh noise cho hệ thống, Falco cũng hỗ trợ triển khai rule exceptions theo cú pháp sau:
+
+– rule: <the_name_of_the_rule>
+  desc: (…)
+  condition: (…)
+  output: (…)
+  tags: (…)
+  exceptions:
+    – name: <name_of_the_exception>
+      fields: [proc.name, fd.name] comps: [=, in] values:
+    – [my_bin_A, [my_file_A]] – [custom_bin_B, [allowed_file_for_B, other_B_file]]
+Giải thích qua một chút về các trường trong cú pháp trên:
+
+name: định danh ngoại lệ
+fields: các trường cần xem xét
+comps: các toán tử để khớp giữa các trường và giá trị
+values: giá trị cần xem xét
+Các trường fields, comps và values sẽ được sắp xếp theo các cặp, việc so khớp sẽ được thực hiện theo thứ tự, các phần từ đầu tiên của mỗi cặp sẽ được so sánh với nhau trước, sau đó đến các phần từ về sau cho đến khi kết thúc. Có nghĩa là có trường fields, comps và values này khi khai báo đều phải có cùng kích thước. Để dễ hiểu hơn, chúng ta hãy xem xét ví dụ dưới đây:
+
+– rule:
+  (…)
+  exceptions:
+    – name: example_exception
+      fields: [proc.name, fd.name] comps: [=, in] values:
+    – [process_A, file_A] – [process_B, [file_B, file_C]]
+Đoạn rule trên sẽ đặt một ngoại lệ và không lên cảnh báo khi
+
+process_A = file_A
+process_B in file_B or file_C
+Dễ hiểu hơn nữa, lấy ví dụ về bối cảnh sau: Công ty X sử dụng web server apache, để tăng tính bảo mật, công ty phát triển một công cụ cho phép giám sát thư mục của user root. Để có thể giám sát, công cụ cần gọi tới shell mỗi vài giây để liệt kê các file có trong thư mục và ghi output vào một file ở đường dẫn /tmp. Theo mặc định, hành vi này sẽ trigger rule như Run shell untrusted khiến cho hệ thống khá noise, người viết rule sẽ cần tinh chỉnh lại rule này.
+
+
+Với cách cảnh báo như hình ảnh trên, chúng ta nhận thấy một số trường có giá trị bị lập lại, các giá trị này là apache2 và bash -c ls /root > /tmp/pmt tương ứng với process name và process command line.
+
+Người tinh chỉnh rule sẽ cần đưa 2 giá trị này vào exception sử dụng lần lượt trường proc.pname và proc.cmdline, ghi đè các tinh chỉnh vào file tại đường dẫn /root/values.yaml như cách triển khai dưới đây:
+
+customRules:
+  custom_rules_from_default: |-
+    (…)
+    – rule: Run shell untrusted
+      (…)
+      exceptions:
+        – name: app1_shell_runner
+          fields: [proc.pname, proc.cmdline] comps: [=, =] values:
+        – [apache2, bash -c ls /root > /tmp/pmt] (…)
+
+Chúng ta chạy lại Falco với rule mới vừa tạo và kiểm tra lại logs của Falco, mặc dù tiến trình vẫn đang chạy nhưng không còn các cảnh báo trong logs như ban đầu.
+
+
+Trên đây là những giới thiệu và hướng dẫn tương đối cơ bản để bạn đọc có thể tự tạo cũng như tùy chỉnh các rule. Để thuận lợi hơn trong quá trình viết rule, có những công cụ mà người dùng có thể sử dụng để kiểm tra độ hiệu quả của các rule. Atomic redteam hiện tại cũng mô phỏng các kỹ thuật tấn công trên môi trường container, dựa vào các mô phỏng này, người viết rule có thể xem lại các logs và tinh chỉnh lại rule cho phù hợp. Bên cạnh Atomic, event-generator cũng sinh ra các mẫu hành vi cho cả syscall và k8s audit log.
+
