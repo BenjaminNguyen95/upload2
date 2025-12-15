@@ -1,0 +1,126 @@
+Falco là gì?
+Falco là công cụ cloud-native security, cung cấp khả năng giám sát cũng như phát hiện thời gian thực (real-time) các hành vi tấn công dựa theo tập luật trên môi trường host, cloud, container và K8s. Ban đầu, Falco được phát triển bởi Sysdig – một công ty chuyên về giám sát và bảo mật hệ thống và ứng dụng container.
+
+Về sau, Falco được chuyển giao cho Cloud Native Computing Foundation (CNCF), một tổ chức phi lợi nhuận uy tín chịu trách nhiệm quản lý nhiều dự án mã nguồn mở cho các hệ thống Cloud Native (ví dụ như Kubernetes, Prometheus, Envoy hay nhiều dự án khác).
+
+Kiến trúc của Falco
+Falco hoạt động ở cả 2 phân vùng userspace và kernel. Trong phân vùng kernel, các lời gọi hệ thống (syscalls) sẽ được thu thập bởi một trình điều khiển (driver), ví dụ như kernel module, eBPF probe hoặc modern eBPF probe.
+
+
+Các syscalls này sẽ được lưu trong ring buffer (ring buffer hay cyclic buffer là một cấu trúc dữ liệu được sử dụng để lưu trữ dữ liệu tạm thời trong bộ nhớ, hoạt động như một hàng đợi – circular queue) sau đó mới chuyển vào user space, các events này sẽ được xử lý thông qua rules engine với các tập luật được đã được định nghĩa.
+
+Theo mặc định, Falco đã có sẵn những tập luật cơ bản, ngoài ra cũng cho phép người dùng thêm, ngắt hoặc sửa đổi để phù hợp với nghiệp vụ từng hệ thống. Nếu Falco phát hiện bất kỳ các events bất thường, alert sẽ được trigger và thông báo tới đa dạng các endpoints khác nhau tùy thuộc vào cấu hình
+
+Falco hoạt động như thế nào?
+Falco thu thập các sự kiện (events) từ một hoặc nhiều source và so sánh từng sự kiện này với một tập luật (có sẵn và có thể tùy chỉnh) để phát hiện các hành vi bất hường. Ví dụ, đối với system call (syscalls), các events sẽ được driver của Falco xử lý để thu thập.
+
+Sau khi một hoặc nhiều events khớp với tập luật, các cảnh báo này sẽ được chuyển tiếp tới nhiều nguồn khác nhau (syslog, stdout, HTTPS, và gRPC endpoints) hoặc thông qua Falcosidekick, một trong những công cụ/thành phần có sẵn trong Falco, cho phép tích hợp với các ứng dụng hoặc dịch vụ khác (slack, email, v.v…)
+
+
+Cách thức triển khai Falco
+Bên cạnh việc cấu hình trên K8S, Falco cũng cho phép cài đặt trên môi trường host hoặc cài đặt thông qua docker. Ở phạm vi bài viết, chúng tôi chỉ giới thiệu cách thức cài đặt trên môi trường K8s. Cách thức cài đặt trên host và thông qua docker bạn đọc có thể tham khảo thêm trên trang chủ của Falco.
+
+Trước khi cài đặt Falco, hãy đảm bảo đã cấu hình cài đặt môi trường K8s và các công cụ hỗ trợ liên quan. Đơn giản và dễ cài đặt, bạn đọc có thể cài đặt K3S làm môi trường để thử nghiệm và thực hành, cách thức cài đặt tham khảo tại đây.
+
+Bài viết sẽ cài đặt Falco thông qua Heml (package manager) với chế độ DaemonSet, việc triển khai theo chế độ này sẽ thêm Falco vào mỗi node trong cluster.Để cài đặt Falco trên môi trường K8S, người dùng hãy đảm bảo Helm đang sử dụng phiên bản mới nhất
+
+Cài đặt kernel headers
+Trước khi thực hiện cài đặt Falco trong Kubernetes cluster, chúng ta sẽ thực hiện kiểm tra phiên bản của kernel sử dụng trong nodes có được hỗ trợ hay không. Việc kiểm tra này nhằm cài đặt kernel header để tương thích với các driver mà Falco sử dụng.
+
+apt search linux-headers-$(uname -r)
+apt-get -y install linux-headers-$(uname -r)
+apt search linux-headers-$(uname -r)
+
+Cài falco qua helm chart
+Trước khi cài đặt, thêm falcosecurity charts repository sử dụng câu lệnh sau:
+
+helm repo add falcosecurity https://falcosecurity.github.io/charts
+helm repo update
+Thực hiện tạo namespace cho Falco và cài đặt Falco chart thông qua các câu lệnh dưới đây:
+
+kubectl create ns falco
+helm install falco \
+-n falco \
+--version 2.4.2 \
+--set tty=true \
+--set collectors.containerd.enabled=true \
+--set collectors.containerd.socket=/run/k3s/containerd/containerd.sock \
+falcosecurity/falco
+
+Lưu ý: Ví dụ trên mình đang sử dụng môi trường k8s containerd, nếu bạn sử dụng docker cần thay đổi socket cho phù hợp.
+
+Sau một vài phút, các phiên bản Falco sẽ chạy trên tất cả các node. Do không chỉ định driver cụ thể, theo mặc định quá trình cài đặt sẽ sử dụng kernel module.
+
+Trạng thái của Falco có thể được kiểm tra thông qua kubectl
+
+
+Test Falco
+Chúng ta sẽ thử nghiệm Falco với một use case cơ bản, kẻ tấn công thu thập thông tin nhạy cảm trên hệ thống, trong trường hợp này là tìm kiếm SSH private key trong tệp tin id_rsa. Với thông tin SSH private key này, kẻ tấn công có thể thực hiện xác thực đăng nhập SSH thông qua key.
+
+Thực hiện test case, chúng ta thu được kết quả như hình dưới đây, hành vi tìm kiếm kiếm file id_rsa đã trigger rule của Falco.
+
+
+Có một vài điểm quan trọng sau cần để ý trong quá trình triển khai:
+
+Trước khi cài đặt, người dùng nên kiểm tra phiên bản kernel hiện có để đảm bảo tính tương thích với driver của Falco hay không, do driver sẽ là cốt lõi chính để phân tích, xử lý và chuyển các sự kiện tới userspace. Nếu các driver không tương thích với kernel, quá trình cài đặt Falco sẽ phát sinh lỗi (thiếu kernel image, CrashLoopBackOff, v.v…). Hiện tại Falco hỗ trợ 3 loại driver bao gồm kernel, EBF probe và modern EBF probe, với kernel module, đây là tùy chọn mặc định, modern EBF probe có một ưu điểm là đã được nhúng sẵn trong Falco mà không cần cài đặt hoặc tải xuống, miễn là kernel trên hệ thống có phiên bản lớn hơn hoặc bằng 5.8, driver sẽ tự động được inject. Cuối cùng là EBF probe, driver này có thể cung cấp tính tương thích tốt hơn do có thể tương thích với một số phiên bản kernel thấp. Chi tiết hơn về các driver, bạn đọc có thể tham khảo thêm tại đây
+Cách thức dễ nhất để triển khai Falco trên K8s là sử dụng Heml với các cấu hình tùy chỉnh. Falco cũng có thể cài đặt thử công bằng cách tự định nghĩa các đôi tượng (object) trong file YAML
+Khi cập nhật Falco, nếu hệ thống sử dụng kernel module, người dùng nên thực hiện gỡ bỏ kernel module có tên falco thông qua command rmmod falco để tránh phát sinh các vấn đề khi câp nhât.
+Khi Falco thay đổi hoặc release các tính năng mới, new chart sẽ được released. Để tránh việc có những thay đổi không mong muốn, người dùng nên chỉ định một phiên bản cụ thể, ngay cả trong quá trình cài đặt (khi sử dụng helm install và helm upgrade)
+Nếu cần thực hiện thay đổi thông qua Heml, sử dụng option –reuse-values nhằm đảm bảo các cấu hình ban đầu trong chart đã set trước đó không bị thay đổi trong quá trình nâng cấp. Tuy nhiên options này sẽ không giữ nguyên giá trị của tùy chọn version nếu nó được chỉ định trong lần cài đặt ban đầu -> mỗi lần update người dùng nên chỉ định giá tri cho option version.
+Falco Event Sources
+Ở phần trước, bạn đọc đã được giới thiệu về cách thức cấu hình để giám sát các lời gọi hệ thống. Tuy nhiên, Falco không chỉ dừng lại ở việc giám sát các lời gọi hệ thống (thực thi câu lệnh, ssh…) mà còn hỗ trợ cho việc thu thập các sự kiện (events) từ nguồn Kubernetes Audit Logs hay đa dạng các nguồn khác như AWS CloudTrail, Okta, thông qua falco plugin. Theo cách này, người dùng cũng có thể tự tạo được plugin của riêng mình để thu thập các nguồn events khác.
+
+
+Với nguồn sự kiện từ Audit Logs của K8S, hệ thống giám sát sẽ có thu thập được các sự kiện, các tác vụ tác động đến cluster giúp phát hiện các hành vi, hoạt động bất thường trong cluster. Để thu thập các sự kiện này, K8S cluster cần enable audit logs và cấu hình gửi audit logs này tới plugin k8saudit.
+
+Chúng ta sẽ thực hiện cấu hình lấy log source từ K8S audit logs trên môi trường K3S bằng một loại các hướng dẫn dưới đây:
+
+Cấu hình enable K8S audit log
+Tạo một file có tên audit.log và phân quyền cho file:
+
+mkdir -p /var/lib/rancher/audit
+touch /var/lib/rancher/audit/audit.log
+chmod 777 /var/lib/rancher/audit/audit.log
+Audit policy định nghĩa và quy định các mức độ cho quá trình ghi lạ các sự kiện và thông tin liên quan. Theo mặc định, Falco cũng cũng cung cấp các chính sách này, download file và sao chép tới đúng thư mục của file audit.log
+
+wget https://raw.githubusercontent.com/falcosecurity/contrib/main/examples/k8s_audit_config/audit-policy.yaml
+cp audit-policy.yaml /var/lib/rancher/audit/
+Tạo cấu hình webhook cho api server và sao chép tới cùng thư mục với audit.log
+
+cat << EOF | sudo tee /var/lib/rancher/audit/webhook-config.yaml
+apiVersion: v1
+kind: Config
+clusters:
+– name: falco
+cluster:
+server: http://localhost:30007/k8s-audit
+contexts:
+– context:
+cluster: falco
+user: ""
+name: default-context
+current-context: default-context
+preferences: {}
+users: [] EOF
+Chỉ định các tham số audit-log-path, audit-policy-file, webhook-config và restart lại kube-apiserver.
+
+Cấu hình K8S với k8s-audit events
+Falco cũng cung cấp sẵn cấu hình thu thập sự kiện k8s-audit trong file falco.yaml.
+
+Tải xuống và lưu vào tệp tin values.yaml sử dụng curl:
+
+curl https://raw.githubusercontent.com/falcosecurity/charts/falco-2.4.2/falco/values-k8saudit.yaml -o values.yaml
+
+Trong trường hợp trên, file cấu hình đang không thu thập các sự kiện từ nguồn log source là syscalls. Tuy nhiên, Falco cho phép hoạt động đồng thời với nhiều nguồn khác nhau, người dùng có thể sử dụng cùng một phiên bản Falco để thu thập đồng thời từ cả 2 nguồn k8s-audit plugin và syscalls.
+
+Ở ví dụ này, chúng tôi cấu hình cho các alert được hiển thị trên falcosidekick, một portal cho phép hiển thị các cảnh báo (falcosidekick sẽ được đề cập rõ ràng hơn ở các phần sau). Sau đó sử dụng Heml để triển khai Falco.
+
+helm install falco \
+--version 2.4.2 \
+--create-namespace \
+--namespace falco \
+--set tty=true \
+--set falcosidekick.enabled=true \
+--set falcosidekick.webui.enabled=true \
+--values=values.yaml \
+falcosecurity/falco
