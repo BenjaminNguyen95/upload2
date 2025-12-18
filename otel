@@ -1,0 +1,13 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        # include_metadata: true # May be required depending on setup
+        cors:
+          allowed_origins:
+            - https://foo.bar.com
+            - https://*.test.com
+          allowed_headers:
+            - Example-Header
+            - '*' # Use '*' to allow any custom headers
+          max_age: 7200
