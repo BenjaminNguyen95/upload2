@@ -1,0 +1,24 @@
+processors:
+  transform:
+    trace_statements:
+      - context: span
+        statements:
+          # Extract the value of the "X-Custom-Header" from request metadata 
+          # and set it as a span attribute named "my.custom.attribute"
+          - set(attributes["my.custom.attribute"], request.metadata["X-Custom-Header"]) 
+
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform, batch] # Add 'transform' before 'batch'
+      exporters: [logging] # Replace 'logging' with your desired exporter
+    metrics:
+      receivers: [otlp]
+      processors: [transform, batch]
+      exporters: [logging]
+    logs:
+      receivers: [otlp]
+      processors: [transform, batch]
+      exporters: [logging]
