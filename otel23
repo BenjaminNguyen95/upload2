@@ -1,0 +1,41 @@
+curl -v https://otel-collector.your-domain.com:443/v1/traces \
+  -H "Content-Type: application/json" \
+  -H "X-Forwarded-For: 8.8.8.8" \
+  -H "User-Agent: curl-test/1.0" \
+  -d '{
+    "resourceSpans": [
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": { "stringValue": "curl-test-client" }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "curl-test"
+            },
+            "spans": [
+              {
+                "traceId": "11111111111111111111111111111111",
+                "spanId": "2222222222222222",
+                "name": "curl-span",
+                "kind": 2,
+                "startTimeUnixNano": 1734926400000000000,
+                "endTimeUnixNano": 1734926401000000000,
+                "attributes": [
+                  {
+                    "key": "http.method",
+                    "value": { "stringValue": "POST" }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }'
