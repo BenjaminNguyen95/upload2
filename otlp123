@@ -1,0 +1,42 @@
+receivers:
+  jaeger:
+    protocols:
+      grpc:
+      thrift_binary:
+      thrift_compact:
+      thrift_http:
+  otlp:
+    protocols:
+      grpc:
+        include_metadata: true
+      http:
+        cors:
+          allowed_origins:
+            - "http://localhost*"
+        include_metadata: true
+  zipkin:
+exporters:
+  jaeger:
+    endpoint: "jaeger-Development:14250"
+    tls:
+      insecure: true
+  logging:
+  zipkin:
+    endpoint: "http://zipkin:9411/api/v2/spans"
+processors:
+  attributes/rp:
+    actions:
+      - key: http.client_id
+        from_context: X-Forwarded-For
+        action: upsert
+  batch:
+extensions:
+  health_check:
+  pprof:
+  zpages:
+service:
+  extensions: [pprof, zpages, health_check]
+  pipelines:  
+    traces:
+      receivers: [otlp, zipkin]
+      exporters: [jaeger, logging]
