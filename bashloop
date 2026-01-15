@@ -1,0 +1,6 @@
+kubectl get settings.management.cattle.io --no-headers \
+| awk '{print $1}' \
+| while read p; do
+    kubectl get settings.management.cattle.io "$p" -o yaml \
+    | grep -q 'releases.rancher.com' && echo "$p"
+  done
