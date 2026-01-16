@@ -1,0 +1,19 @@
+| Giải nghĩa                            | Nhóm quyền                      | Quyền cụ thể                            |
+| ------------------------------------- | ------------------------------- | --------------------------------------- |
+| Truy cập license vCenter              | Global                          | Licenses                                |
+| CSI có thể tìm và thao tác volume CNS | CNS                             | Searchable                              |
+| CSI tạo / xóa / mở rộng volume        | CNS                             | Volume operations                       |
+| Cấp phát dung lượng cho PVC           | Datastore                       | Allocate space                          |
+| Duyệt datastore để tìm VMDK           | Datastore                       | Browse datastore                        |
+| Tạo file VMDK mức thấp                | Datastore                       | Low level file operations               |
+| Xóa VMDK khi delete PVC               | Datastore                       | Remove file                             |
+| Gắn disk hiện có vào VM               | Virtual Machine → Configuration | Add existing disk                       |
+| Tạo disk mới cho VM                   | Virtual Machine → Configuration | Add new disk                            |
+| Tháo disk khi PVC bị xóa              | Virtual Machine → Configuration | Remove disk                             |
+| Resize / cấu hình nâng cao VM         | Virtual Machine → Configuration | Advanced configuration                  |
+| Power off VM khi attach/detach        | Virtual Machine → Interaction   | Power off                               |
+| Tạo VM từ template (internal)         | Virtual Machine → Inventory     | Create from existing                    |
+| Cho phép VM truy cập disk             | Virtual Machine → Provisioning  | Allow disk access                       |
+| CSI thao tác partition storage        | Host → Configuration            | Storage partition configuration         |
+| Thao tác cục bộ trên host ESXi        | Host → Local operations         | Local operations                        |
+| Gán VM vào resource pool              | Resource                        | Assign virtual machine to resource pool |
