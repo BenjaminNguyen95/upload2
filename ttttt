@@ -1,0 +1,6 @@
+openssl genrsa -out testleontiactcenter.gg.com.vn.key 2048
+openssl req -new \
+-key testleontiactcenter.gg.com.vn.key \
+-out testleontiactcenter.gg.com.vn.csr \
+-subj "/C=VN/ST=Hanoi/L=Hanoi/O=/CN="
+openssl req -in testleontiactcenter.gg.com.vn.csr -noout -text
