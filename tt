@@ -1,0 +1,27 @@
+cat > wildcard_gg.com.vn.cnf <<EOF
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+req_extensions = req_ext
+distinguished_name = dn
+
+[dn]
+C = VN
+ST = Hanoi
+L = Hanoi
+O = GG 
+CN = *.gg.com.vn
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = *.gg.com.vn
+DNS.2 = gg.com.vn
+EOF
+openssl req -new \
+-key gg.com.vn.key \
+-out gg.com.vn.csr \
+-config wildcard_gg.com.vn.cnf
+openssl req -in gg.com.vn.csr -noout -text
