@@ -1,0 +1,19 @@
+Dự án Kubernetes đã thông báo vào tháng 11 năm 2025 rằng Ingress NGINX Controller sẽ bị ngừng hỗ trợ vào ngày 31 tháng 3 năm 2026.
+
+Đây là bộ điều khiển ingress được tích hợp sẵn trong hầu hết các bản phân phối Kubernetes. Nó được vô số hướng dẫn khuyến nghị sử dụng. Có lẽ bạn cũng đang sử dụng nó trong môi trường sản xuất hiện tại. Trong ba tháng nữa, nó sẽ ngừng nhận các bản vá bảo mật, sửa lỗi và cập nhật tương thích.
+
+Chúng tôi đã đánh giá ý nghĩa của việc ngừng hỗ trợ Ingress NGINX này đối với Okteto và hệ sinh thái Kubernetes nói chung. Dưới đây là phân tích của chúng tôi và một khung quyết định có thể hữu ích nếu bạn đang trải qua quá trình chuyển đổi này.
+
+Điều gì thực sự xảy ra với việc ngừng hỗ trợ Ingress NGINX?
+
+Bản thân API Ingress của Kubernetes không bị ngừng hỗ trợ. Bạn vẫn có thể tạo tài nguyên Ingress. Cái bị ngừng hỗ trợ là bộ điều khiển dựa trên NGINX cụ thể triển khai API đó.
+
+Việc ngừng hỗ trợ Ingress NGINX Controller này tạo ra ba rủi ro vận hành nghiêm trọng:
+
+Các lỗ hổng bảo mật sẽ không được vá. Sau tháng 3 năm 2026, các lỗ hổng CVE được phát hiện trong Ingress NGINX Controller sẽ không được sửa chữa ở phiên bản gốc. Bạn sẽ cần phải tự duy trì phiên bản riêng hoặc chấp nhận rủi ro bảo mật.
+
+Việc sửa lỗi sẽ chấm dứt vĩnh viễn. Khi định tuyến ingress bị lỗi hoặc hoạt động không như mong đợi, sẽ không còn người bảo trì phiên bản gốc nào để báo cáo sự cố hoặc mong đợi được giải quyết.
+
+Khả năng tương thích với Kubernetes sẽ giảm dần theo thời gian. Các bản phát hành Kubernetes mới sẽ đưa ra những thay đổi mà bộ điều khiển đã lỗi thời không thể xử lý. Nó có thể hoạt động với Kubernetes 1.32, nhưng có khả năng sẽ gặp lỗi với phiên bản 1.35 trở lên.
+
+Lưu ý quan trọng: Việc ngừng hỗ trợ này chỉ ảnh hưởng đến dự án kubernetes/ingress-nginx. Bộ điều khiển ingress thương mại của NGINX Inc. (nay là một phần của F5) vẫn được duy trì và hỗ trợ tích cực. Đó là một mã nguồn hoàn toàn riêng biệt với vòng đời riêng.
