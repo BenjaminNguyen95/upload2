@@ -1,0 +1,35 @@
+1. Gateway API là gì? (Phân tích dưới góc độ Kiến trúc)
+Nếu Ingress là một "vách ngăn" đơn giản chỉ để dẫn khách vào nhà, thì Gateway API là một "hệ thống lễ tân thông minh" có khả năng phân quyền và điều phối phức tạp.
+
+Nó không thay thế Proxy (Envoy, Nginx, HAProxy), mà nó thay thế cách chúng ta ra lệnh cho các Proxy đó. Gateway API chia nhỏ cấu hình thành các tài nguyên (Resources) riêng biệt:
+
+GatewayClass: Định nghĩa loại hạ tầng (ví dụ: f5-bigip, istio, envoy). Do người quản trị hạ tầng (Cloud Admin) quản lý.
+
+Gateway: Định nghĩa điểm tiếp nhận traffic (IP, Port, Protocol, TLS). Do người vận hành cụm (Cluster Operator/SRE) quản lý.
+
+HTTPRoute / GRPCRoute: Định nghĩa quy tắc điều hướng (Routing) và xử lý request. Do người phát triển ứng dụng (Application Developer) quản lý.
+
+2. Lợi ích cốt lõi khi thay thế Ingress bằng Gateway API
+A. Chấm dứt "Cơn ác mộng Annotation" (No more Annotation Hell)
+Trong Ingress Nginx, mọi tính năng nâng cao (Rate limit, Rewrite, Auth, Canary) đều phải nhét vào metadata.annotations. Điều này khiến file YAML trở nên cực kỳ khó đọc và dễ sai sót.
+
+Với Gateway API: Các tính năng này được chuẩn hóa thành các Filters nằm ngay trong cấu hình Route. Bạn có thể kiểm soát chúng bằng code thay vì các chuỗi string hỗn loạn.
+
+B. Phân quyền rõ rạt (Role-based Separation)
+Trong ngân hàng, đội Network/SRE quản lý chứng chỉ SSL và Load Balancer, còn đội Dev quản lý URL trỏ vào App.
+
+Vấn đề của Ingress: Cả hai đội thường phải sửa chung một file Ingress. Một sai sót nhỏ của Dev có thể làm hỏng cấu hình TLS của toàn bộ hệ thống.
+
+Giải pháp Gateway API: SRE tạo ra Gateway (chứa TLS). Dev tạo ra HTTPRoute và "gắn" (attach) vào Gateway đó. Dev không có quyền sờ vào cấu hình bảo mật, đảm bảo tính an toàn hệ thống.
+
+C. Khả năng điều hướng nâng cao (Advanced Traffic Management)
+Ingress truyền thống rất yếu trong việc xử lý các kịch bản triển khai hiện đại.
+
+Canary & Blue-Green: Với Gateway API, bạn có thể chia traffic theo trọng số (Weight) cực kỳ đơn giản: 90% cho v1, 10% cho v2 ngay trong spec mà không cần cài thêm công cụ bên ngoài.
+
+Header-based Routing: Điều hướng người dùng dựa trên thông tin trong Header (ví dụ: khách hàng VIP đi luồng ưu tiên) được thực hiện cực kỳ tường minh.
+
+D. Tính di động (Portability) và Không bị khóa bởi Vendor
+Nếu bạn dùng ingress-nginx, bạn bị trói buộc vào các annotation của Nginx. Khi muốn chuyển sang AWS ALB hay F5, bạn phải viết lại toàn bộ Ingress.
+
+Với Gateway API: Vì đây là tiêu chuẩn chung của Kubernetes, bạn có thể chuyển đổi giữa các nhà cung cấp (từ Envoy sang HAProxy hoặc Kong) mà không cần thay đổi file HTTPRoute của ứng dụng.
