@@ -1,0 +1,19 @@
+The Kubernetes project announced in November 2025 that the Ingress NGINX Controller will be retired on March 31st, 2026.
+
+This is the ingress controller that ships as the default in most Kubernetes distributions. It's what countless tutorials recommend. It's probably what you're running in production right now. In three months, it stops receiving security patches, bug fixes, and compatibility updates.
+
+We've been evaluating what this ingress nginx deprecation means for Okteto and the broader Kubernetes ecosystem. Here's our analysis and a decision framework that might help if you're navigating this transition.
+
+What's Actually Happening with the Ingress NGINX Deprecation
+The Kubernetes Ingress API itself is not being deprecated. You can still create Ingress resources. What's being retired is the specific NGINX-based controller that implements that API.
+
+This Ingress NGINX Controller retirement creates three critical operational risks:
+
+Security vulnerabilities won't receive patches. After March 2026, CVEs discovered in the Ingress NGINX Controller won't be fixed upstream. You'll need to maintain your own fork or accept the security exposure.
+
+Bug fixes end permanently. When ingress routing breaks or behaves unexpectedly, there's no upstream maintainer to file issues with or expect resolution from.
+
+Kubernetes compatibility will degrade over time. New Kubernetes releases will introduce changes that the deprecated controller can't handle. It might function with Kubernetes 1.32, but will likely fail with 1.35 and beyond.
+
+Important distinction: This deprecation affects only the kubernetes/ingress-nginxproject. NGINX Inc.'s commercial ingress controller (now part of F5) remains actively maintained and supported. It's a completely separate codebase with its own lifecycle.
+
