@@ -1,0 +1,21 @@
+| Tiêu chí                 | Ingress-NGINX (Community) | NGINX-Ingress (F5)            |
+| ------------------------ | ------------------------- | ----------------------------- |
+| Đơn vị phát triển        | Kubernetes Community      | F5 / NGINX Inc                |
+| Repository               | kubernetes/ingress-nginx  | nginxinc/kubernetes-ingress   |
+| Trạng thái dự án         | End-of-Life tháng 3/2026  | Đang được phát triển          |
+| Phiên bản                | Open Source               | OSS + Commercial (NGINX Plus) |
+| Production support       | Community support         | Enterprise support            |
+| Kubernetes compatibility | Có thể bị hạn chế sau EOL | Được cập nhật liên tục        |
+| Kiến trúc proxy          | NGINX                     | NGINX / NGINX Plus            |
+| Load balancing           | Basic                     | Advanced (Plus có thêm)       |
+| Dynamic reconfiguration  | Reload config             | Native dynamic config         |
+| Performance              | Tốt                       | Tốt hơn với NGINX Plus        |
+| Rate limiting            | Annotation-based          | Native policy                 |
+| Authentication           | Annotation                | Native policy                 |
+| WAF                      | ModSecurity (tùy config)  | NGINX App Protect WAF         |
+| Observability            | Prometheus metrics        | Metrics + dashboard           |
+| Gateway API support      | Không                     | Roadmap hỗ trợ                |
+| Configuration style      | Nhiều annotation          | CRD + policy                  |
+| Security patch           | Không còn sau 2026        | Có                            |
+| Enterprise features      | Không                     | Có                            |
+| Support SLA              | Không                     | Có                            |
