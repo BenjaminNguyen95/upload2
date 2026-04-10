@@ -1,0 +1,257 @@
+🎯 0. Mục tiêu presentation (Slide 1)
+Title:
+
+Migration Ingress Strategy: From NGINX OSS to F5 NGINX + VirtualServer Architecture
+
+Mục tiêu:
+Hiểu vì sao cần thay đổi
+So sánh 2 giải pháp
+Nắm được hướng đi mới
+Thống nhất target architecture:
+VirtualServer + VirtualServerRoute + Policy
+🚨 1. Problem Statement – Vì sao cần thay đổi (Slide 2–3)
+Hiện trạng:
+
+Sử dụng:
+
+NGINX Ingress Controller (bản community)
+Các vấn đề thực tế:
+1. Annotation explosion
+1 ingress = 10–30 annotations
+khó đọc
+khó maintain
+khó debug
+2. Không chuẩn hoá
+mỗi team dùng annotation khác nhau
+behavior không consistent
+3. Khó scale hệ thống lớn
+nhiều team sửa cùng 1 ingress
+conflict liên tục
+blast radius lớn
+4. Governance yếu
+khó enforce:
+security
+timeout
+limit
+không có abstraction layer
+
+👉 Kết luận:
+
+Ingress truyền thống không phù hợp hệ thống lớn (banking / multi-team)
+
+🔄 2. Giải pháp đề xuất (Slide 4)
+
+Chuyển sang:
+
+F5 NGINX Ingress Controller
+Sử dụng:
+VirtualServer
+VirtualServerRoute
+Policy
+
+👉 Target:
+
+Ingress (annotation-based)
+        ↓
+F5 NIC (CRD-based)
+        ↓
+VirtualServer Architecture
+⚖️ 3. So sánh Ingress NGINX vs F5 NIC (Slide 5–6)
+So sánh nhanh
+Tiêu chí	NGINX OSS	F5 NIC
+Config	annotation	CRD rõ ràng
+Readability	thấp	cao
+Governance	yếu	mạnh
+Multi-team	khó	tốt
+Debug	khó	dễ
+Production scale	hạn chế	tốt
+Ví dụ thực tế
+Ingress (cũ)
+annotations:
+  nginx.ingress.kubernetes.io/rewrite-target: /
+  nginx.ingress.kubernetes.io/proxy-body-size: 20m
+  nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+👉 logic nằm trong annotation
+
+F5 NIC (mới)
+policies:
+- body-size
+- https-redirect
+
+👉 rõ ràng & tách biệt
+
+🧠 4. Kiến trúc mới (Slide 7)
+Mô hình mới
+Client
+  ↓
+NGINX Plus
+  ↓
+VirtualServer
+  ↓
+VirtualServerRoute
+  ↓
+Service
+Phân lớp rõ ràng
+Layer	Resource	Owner
+Gateway	VirtualServer	SRE
+Routing	VirtualServerRoute	App team
+Policy	Policy	Platform
+
+👉 Đây là key insight cần nhấn mạnh
+
+🧩 5. VirtualServer là gì (Slide 8)
+định nghĩa:
+domain (host)
+TLS
+entrypoint
+global policy
+
+👉 tương đương:
+
+NGINX server block
+Vai trò:
+điểm vào traffic
+do platform/SRE quản lý
+🔀 6. VirtualServerRoute là gì (Slide 9)
+tách route theo:
+path
+service
+team
+Ví dụ:
+/api/payment → payment team
+/api/account → account team
+
+👉 Lợi ích:
+
+tách ownership
+giảm conflict
+deploy độc lập
+🛡️ 7. Policy là gì (Slide 10)
+Policy dùng cho:
+security
+rate limit
+timeout
+body size
+IP whitelist
+Ví dụ:
+spec:
+  accessControl:
+    allow:
+      - 10.0.0.0/8
+
+👉 Điểm quan trọng:
+
+Policy = reusable + enforce governance
+
+🔁 8. Mapping từ Ingress → F5 NIC (Slide 11)
+Ingress	F5 NIC
+annotation	Policy / spec
+backend	upstream
+path	route
+rewrite-target	rewrite.path
+ingressClass	annotation
+
+👉 giúp team dễ migrate
+
+🧪 9. Ví dụ end-to-end (Slide 12)
+Ingress cũ
+path: /api
+rewrite-target: /
+F5 NIC mới
+VirtualServer
+routes:
+- path: /api
+  route: api/api-vsr
+VirtualServerRoute
+subroutes:
+- path: /api
+  rewrite:
+    path: /
+
+👉 minh hoạ rõ migration
+
+🏗️ 10. Kiến trúc target (Slide 13)
+api.bank.local
+  ├── VirtualServer
+        ├── /payment → payment-vsr
+        ├── /account → account-vsr
+        ├── /card → card-vsr
+
+👉 mỗi team:
+
+tự deploy
+không ảnh hưởng team khác
+📊 11. Lợi ích thực tế (Slide 14)
+1. Readability
+YAML rõ ràng
+không còn annotation
+2. Governance
+policy reuse
+enforce security
+3. Multi-team
+tách ownership
+giảm conflict
+4. Scalability
+scale hàng trăm service
+5. Observability
+dễ debug
+mapping rõ ràng
+⚠️ 12. Rủi ro & lưu ý (Slide 15)
+1. Learning curve
+CRD mới
+cần training
+2. Migration effort
+cần convert YAML
+test lại rewrite / routing
+3. Vendor lock-in
+phụ thuộc F5
+
+👉 nhưng phù hợp production enterprise
+
+🚀 13. Roadmap migration (Slide 16)
+Phase 1
+deploy F5 NIC song song
+Phase 2
+migrate Ingress → VirtualServer
+Phase 3
+tách VirtualServerRoute
+Phase 4
+chuẩn hoá Policy
+🎯 14. Kết luận (Slide 17)
+Key message:
+
+Chúng ta chuyển từ config-based (annotation) → architecture-based (CRD)
+
+Target cuối cùng:
+VirtualServer
++ VirtualServerRoute
++ Policy
+Giá trị mang lại:
+scalable
+secure
+maintainable
+production-ready
+🎤 15. Q&A (Slide 18)
+💡 Tip trình bày (rất quan trọng)
+1. Đừng nói quá sâu kỹ thuật ngay đầu
+
+👉 bắt đầu bằng pain point
+
+2. Dùng sơ đồ nhiều hơn YAML
+3. Nhấn mạnh:
+ownership separation
+4. Dùng 1 ví dụ xuyên suốt
+api.bank.local
+Nếu bạn muốn (rất nên làm tiếp)
+
+Tôi có thể giúp bạn:
+
+🎯 Convert dàn ý này thành:
+slide PowerPoint hoàn chỉnh (10/10)
+có diagram đẹp
+có animation flow
+có speaker note (bạn nói gì từng slide)
+
+👉 chỉ cần nói:
+“build slide giúp tôi”
