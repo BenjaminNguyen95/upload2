@@ -1,0 +1,75 @@
+Cách VMware xây dựng cơ sở hạ tầng ở lớp ảo hóa
+
+Mô hình hypervisor của VMware đã cung cấp sức mạnh cho cơ sở hạ tầng doanh nghiệp trong nhiều thập kỷ, mang lại khả năng kiểm soát nhất quán đối với các lớp điện toán, mạng và lưu trữ.
+
+Các công cụ như vSphere, vCenter và NSX giúp quản lý cơ sở hạ tầng tập trung và đáng tin cậy. Nhưng khi môi trường trở nên năng động hơn, kiến ​​trúc liên kết chặt chẽ này có thể làm chậm các nỗ lực hiện đại hóa và hạn chế tính linh hoạt trên các triển khai lai hoặc dựa trên đám mây.
+
+🚀 Cần một giải pháp lưu trữ thay thế cho vSAN của VMware?
+
+Nếu vSAN đang hạn chế bạn hoặc bạn cần một giải pháp thay thế VMware linh hoạt hơn, Simplyblock cung cấp giải pháp lưu trữ NVMe-over-TCP mà không bị ràng buộc bởi nhà cung cấp. 👉 Simplyblock dành cho VMware
+
+Tại sao VMware vẫn là yếu tố thiết yếu đối với nhiều doanh nghiệp
+
+VMware tiếp tục dẫn đầu trong các lĩnh vực ưu tiên sự ổn định và khả năng dự đoán:
+
+Đã có mặt lâu năm trong các ngành công nghiệp được quản lý chặt chẽ và các khối lượng công việc quan trọng
+Hỗ trợ cách ly máy ảo và quản trị tài nguyên ở cấp độ cơ sở hạ tầng
+Tích hợp hoàn thiện trên các ngăn xếp lưu trữ, điện toán và mạng
+Được hỗ trợ bởi dịch vụ hỗ trợ doanh nghiệp mạnh mẽ và các đối tác trong hệ sinh thái
+Những trở ngại làm chậm VMware
+
+Mặc dù VMware ổn định, nhưng nó không phù hợp với tốc độ phát triển phần mềm nhanh chóng:
+
+Việc cung cấp máy ảo mất thời gian và hạn chế tốc độ phát hành
+Hỗ trợ gốc hạn chế cho containerization và DevOps
+Cấu trúc cấp phép phức tạp, đặc biệt là sau khi Broadcom mua lại
+Cơ sở hạ tầng thường gắn liền với các nhà cung cấp phần cứng được chứng nhận
+Sự ​​phức tạp của VMware ở quy mô lớn
+Ở quy mô lớn hơn hoặc trong các thiết lập đám mây lai, VMware có thể tạo ra thêm chi phí kiến ​​trúc:
+
+Yêu cầu sự đồng bộ toàn diện (vSphere, NSX, vSAN, v.v.)
+Việc mở rộng quy mô lưu trữ và điện toán được kết hợp, làm giảm tính linh hoạt
+Khôi phục thảm họa và ảnh chụp nhanh gắn liền với các giải pháp của nhà cung cấp
+Các hoạt động đa đám mây trở nên tốn kém hơn So sánh VMware và Kubernetes
+VMware vs Kubernetes
+Những lợi ích mà Kubernetes mang lại cho hoạt động điện toán đám mây
+Kubernetes định nghĩa lại cơ sở hạ tầng như một dịch vụ — trừu tượng hóa phần cứng và tự động hóa việc điều phối container.
+
+Nó đóng vai trò là xương sống của các phương pháp DevOps hiện đại, cho phép các nhóm xây dựng, triển khai và quản lý các ứng dụng container hóa ở quy mô lớn. Với khả năng tự động hóa, tự phục hồi và tính di động được tích hợp sẵn, Kubernetes hỗ trợ chu kỳ phân phối nhanh hơn và cơ sở hạ tầng mạnh mẽ hơn trên nhiều môi trường.
+
+Tại sao Kubernetes được xây dựng để phân phối ứng dụng ở quy mô lớn
+Kubernetes mang lại cho các nhóm sự linh hoạt và tự động hóa ngay từ ngày đầu tiên:
+
+Tự động hóa việc triển khai, mở rộng quy mô và phục hồi các ứng dụng được đóng gói trong container
+Cho phép cấu hình khai báo và quy trình làm việc cơ sở hạ tầng dưới dạng mã
+Tích hợp liền mạch với công cụ quan sát và CI/CD
+Hỗ trợ môi trường đám mây lai và đa đám mây với khả năng di động gốc
+Những thách thức mà các nhóm phải đối mặt khi áp dụng Kubernetes
+Mặc dù mạnh mẽ, Kubernetes làm tăng độ phức tạp vận hành đối với các nhóm chưa quen thuộc với nó:
+
+Yêu cầu kỹ năng kỹ thuật nền tảng và SRE chuyên biệt
+Lưu trữ, truy cập và bảo mật cần công cụ bên ngoài
+Quá trình làm quen có thể khó khăn đối với các nhóm CNTT truyền thống
+Gỡ lỗi hành vi container đòi hỏi quy trình làm việc và khả năng quan sát được cập nhật
+Những điểm Kubernetes vượt trội so với các nền tảng truyền thống
+Kubernetes phát triển mạnh trong môi trường mà việc phân phối nhanh chóng và các dịch vụ mô-đun là quan trọng:
+
+Hỗ trợ kiến ​​trúc microservices, API và serverless
+Phù hợp với các nhóm linh hoạt và mô hình phân phối đám mây gốc
+Lý tưởng cho điện toán biên và triển khai đa vùng
+Cho phép cơ sở hạ tầng có thể mở rộng cho AI, phân tích dữ liệu và ứng dụng hướng sự kiện
+VMware và Kubernetes – So sánh những điểm khác biệt cốt lõi
+Cả VMware và Kubernetes đều có thể quản lý khối lượng công việc — nhưng chúng phục vụ các mục tiêu cơ sở hạ tầng rất khác nhau. Dưới đây là bảng so sánh giữa hai nền tảng này:
+
+Thể loại VMware Kubernetes
+Mô hình cơ sở hạ tầng Máy ảo dựa trên Hypervisor Công cụ điều phối container
+Mặt điều khiển Công cụ GUI và CLI (vSphere, NSX, vCenter) Quy trình làm việc khai báo, dựa trên API (YAML, GitOps)
+Phù hợp nhất với Hệ thống cũ, khối lượng công việc tuân thủ nghiêm ngặt Các microservice hiện đại và ứng dụng động
+Hành vi mở rộng Mở rộng theo chiều dọc ở cấp độ VM và máy chủ Mở rộng theo chiều ngang ở cấp độ container
+Phương pháp lưu trữ Ổ đĩa gắn ngoài thông qua hệ thống vSAN hoặc SAN/NAS Cung cấp động dựa trên CSI cho pod
+Mức độ phù hợp với tự động hóa Quy trình làm việc thủ công hoặc bán tự động CI/CD hoàn toàn tự động, phân phối ưu tiên GitOps
+Vai trò hiện đại hóa Mạnh mẽ cho việc di chuyển VM và các lớp nền lai Cần thiết cho các nền tảng đám mây gốc, do nhà phát triển dẫn dắt
+Chạy Postgres trên VMware so với Kubernetes
+Cả VMware và Kubernetes đều có thể lưu trữ PostgreSQL. Với VMware, bạn thường chạy Postgres trong các máy ảo, quản lý nó giống như bất kỳ ứng dụng nào khác trong cơ sở hạ tầng VM của bạn. Với Kubernetes, Postgres chạy như một dịch vụ được đóng gói trong container bằng cách sử dụng operator và StatefulSets, cho phép tự động hóa, tính khả dụng cao và khả năng mở rộng.
+
+Nếu Postgres là khối lượng công việc chính mà bạn quan tâm, thường sẽ dễ dàng hơn khi coi nó như một nền tảng hơn là tự xây dựng trên cơ sở hạ tầng hiện có. Vela là một nền tảng Postgres của simplyblock chạy trên Kubernetes, mang lại cho bạn hiệu suất cao.
