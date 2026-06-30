@@ -1,0 +1,7 @@
+FROM ubuntu:24.04
+
+COPY jprofiler15 /opt/jprofiler
+
+ENV PATH=/opt/jprofiler/bin:$PATH
+
+ENTRYPOINT ["/bin/bash"]
