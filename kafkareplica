@@ -1,0 +1,1212 @@
+ChatGPT
+
+
+
+
+Claim offer
+bạn là chuyên gia SRE , senior devops ,platform engineer với 15 năm kinh nghiệm triển khai các hệ thống các nền tảng về công nghệ cho công ty tài chính chứng khoán phục vụ hàng triệu giao dịch với tính sẵn sàng và độ tin cậy cao . Đối với kafka là một message queue và event message cho các ứng dụng của tôi phục vụ các viêc sử lý bất đồng bộ hiện tại cluster của tôi đang có 3 broker các topic được tạo với 2 replicas chỉ số min insync =2 isr =2 và các ứng dụng produce với tham số ack sync -= all trong trường hợp 1 broker bị chết mà các topic có patition nằm trên broker đó thì phía ứng dụng produce bị lỗi . Hãy phân tích nguyên nhan 
+
+Với cấu hình bạn mô tả, về lý thuyết producer không nên bị lỗi khi chỉ mất 1 broker nếu cluster được cấu hình đúng. Việc producer bị lỗi chứng tỏ có một hoặc nhiều vấn đề trong kiến trúc hoặc cấu hình.
+
+Kiến trúc hiện tại
+Broker1
+Broker2
+Broker3
+
+Topic:
+Replication Factor = 2
+min.insync.replicas = 2
+
+Producer
+acks=all
+enable.idempotence=true (nếu có)
+Ví dụ một partition
+
+Partition 0
+
+Leader : Broker1
+Follower : Broker2
+
+ISR = [Broker1,Broker2]
+Broker3 không chứa replica của partition này.
+
+Khi Broker1 chết thì điều gì xảy ra?
+Leader Broker1 chết.
+
+Kafka Controller sẽ bầu leader mới.
+
+Broker2 trở thành Leader
+Nếu Broker2 vẫn còn trong ISR thì producer vẫn ghi bình thường.
+
+ISR
+
+Broker2
+
+acks=all
+
+min.insync.replicas=2
+Đến đây xuất hiện vấn đề.
+
+ISR hiện tại chỉ còn
+
+ISR = 1
+Trong khi
+
+min.insync.replicas = 2
+Kafka sẽ không cho phép ghi nữa.
+
+Producer nhận lỗi
+
+NOT_ENOUGH_REPLICAS
+
+hoặc
+
+NOT_ENOUGH_REPLICAS_AFTER_APPEND
+Đây là hành vi đúng theo thiết kế.
+
+Tại sao Kafka lại từ chối?
+Điều này liên quan tới định nghĩa của acks=all.
+
+Producer chỉ được ACK khi
+
+Leader
++
+ít nhất min.insync.replicas replica cùng ghi thành công
+Bạn đang yêu cầu
+
+min.insync.replicas = 2
+nghĩa là
+
+Leader
++
+1 follower
+phải cùng xác nhận.
+
+Nhưng sau khi Broker1 chết
+
+Leader mới = Broker2
+
+Follower = không còn
+ISR chỉ còn
+
+Broker2
+=> Không đạt yêu cầu.
+
+Đây là điểm rất nhiều người hiểu sai
+Replication Factor = 2
+
+không có nghĩa là
+
+"Mất 1 broker vẫn ghi được"
+
+Nó chỉ có nghĩa là
+
+"Dữ liệu còn tồn tại."
+
+Khả năng tiếp tục ghi còn phụ thuộc
+
+Replication Factor
+
++
+
+ISR
+
++
+
+min.insync.replicas
+
++
+
+acks
+Ví dụ trực quan
+Cluster
+
+Broker1
+Broker2
+Broker3
+Topic
+
+RF=2
+Partition
+
+Leader=B1
+
+Replica=B2
+ISR
+
+[B1,B2]
+Producer
+
+acks=all
+Bước 1
+Producer gửi message
+
+Leader ghi
+
+Follower ghi
+
+ACK
+OK
+
+Bước 2
+Broker1 chết
+
+Leader chuyển sang Broker2
+
+ISR
+
+[B2]
+Bước 3
+Producer gửi tiếp
+
+Kafka kiểm tra
+
+ISR = 1
+
+min.insync =2
+Không đủ.
+
+Kafka trả
+
+NotEnoughReplicasException
+Nếu replication factor = 3 thì sao?
+Topic
+
+Leader = B1
+
+Replica = B2
+
+Replica = B3
+ISR
+
+[B1,B2,B3]
+Broker1 chết
+
+ISR
+
+[B2,B3]
+Leader
+
+B2
+ISR
+
+2
+min.insync
+
+2
+Đạt.
+
+Producer vẫn ghi bình thường.
+
+Đây là lý do tại sao các hệ thống ngân hàng/chứng khoán thường sử dụng:
+
+RF = 3
+min.insync.replicas = 2
+acks=all
+Vậy tại sao Kafka Documentation lại khuyến nghị
+RF=3
+
+min.insync=2
+Vì nó chịu được
+
+mất 1 broker
+mà vẫn
+
+không mất dữ liệu
+
+vẫn ghi được
+
+Nếu RF=2 thì thực tế chịu lỗi là bao nhiêu?
+Giả sử
+
+Broker1
+Broker2
+Broker3
+Partition
+
+Leader=B1
+
+Replica=B2
+Broker3 hoàn toàn không tham gia.
+
+Mất Broker1
+
+ISR=1
+=> Không ghi được.
+
+Mất Broker2
+
+ISR=1
+=> Không ghi được.
+
+Bạn thực tế chỉ có
+
+Fault tolerance for durability
+
+YES
+
+Fault tolerance for write availability
+
+NO
+Nhiều người nhầm giữa HA và Durability
+Replication
+
+=> chống mất dữ liệu
+Không có nghĩa
+
+=> luôn ghi được
+Write Availability phụ thuộc vào
+
+ISR
+Có phải Kafka bị lỗi không?
+Không.
+
+Kafka đang bảo vệ dữ liệu.
+
+Giả sử Kafka vẫn cho ghi.
+
+Leader mới
+
+Broker2
+Không còn replica nào khác.
+
+Producer vẫn ghi.
+
+Broker2 chết ngay sau đó.
+
+message mất vĩnh viễn
+Kafka không cho phép điều này nếu bạn yêu cầu
+
+acks=all
+
+min.insync=2
+Những khả năng khác cũng cần kiểm tra
+Ngoài nguyên nhân chính ở trên, trong môi trường production còn có một số khả năng khiến producer lỗi ngay cả khi còn đủ broker:
+
+1. ISR bị co lại trước khi broker chết
+Ví dụ:
+
+Broker1 (Leader)
+Broker2 (Follower)
+Do:
+
+network latency
+
+disk IO cao
+
+follower fetch chậm
+
+GC pause
+
+CPU 100%
+
+Broker2 bị loại khỏi ISR.
+
+Khi đó
+
+ISR = 1
+Dù Broker1 vẫn sống.
+
+Producer cũng sẽ nhận
+
+NOT_ENOUGH_REPLICAS
+Cần theo dõi các metric như:
+
+UnderReplicatedPartitions
+
+IsrShrinksPerSec
+
+IsrExpandsPerSec
+
+ActiveControllerCount
+
+OfflinePartitionsCount
+
+RequestHandlerAvgIdlePercent
+
+2. Leader election chậm
+Sau khi broker chết
+
+LeaderElection
+mất vài giây.
+
+Trong khoảng đó producer có thể gặp
+
+LEADER_NOT_AVAILABLE
+đây là lỗi tạm thời và producer sẽ retry.
+
+3. Replica placement không cân bằng
+Ví dụ nhiều partition đều có replica trên cùng một broker. Khi broker đó chết, rất nhiều partition đồng thời mất một bản sao, làm giảm đáng kể khả năng ghi. Cần kiểm tra phân bố replica bằng:
+
+kafka-topics.sh --describe --topic <topic>
+Khuyến nghị cho hệ thống tài chính/chứng khoán
+Với yêu cầu độ tin cậy và tính sẵn sàng cao, cấu hình phổ biến là:
+
+Thành phần	Khuyến nghị
+Brokers	3 hoặc 5 (số lẻ)
+Replication Factor	3
+min.insync.replicas	2
+Producer acks	all
+enable.idempotence	true
+max.in.flight.requests.per.connection	≤ 5 (hoặc 1 nếu cần thứ tự tuyệt đối)
+Consumer	Commit offset sau khi xử lý thành công
+Unclean leader election	false
+Cấu hình này cho phép mất 1 broker mà vẫn tiếp tục ghi, đồng thời vẫn đảm bảo không ACK dữ liệu khi chưa có ít nhất hai bản sao đồng bộ.
+
+Kết luận
+Với cấu hình hiện tại:
+
+3 broker
+
+Replication Factor = 2
+
+min.insync.replicas = 2
+
+Producer acks=all
+
+thì việc producer bị lỗi khi broker chứa replica của partition bị chết là hành vi đúng theo thiết kế của Kafka. Nguyên nhân cốt lõi là sau khi broker đó mất, ISR của partition chỉ còn 1 replica, không đáp ứng điều kiện min.insync.replicas=2, nên Kafka từ chối ghi để bảo vệ tính bền vững của dữ liệu.
+
+Nếu mục tiêu của bạn là vừa không mất dữ liệu, vừa vẫn ghi được khi mất 1 broker, thì với cluster 3 broker, cấu hình chuẩn là:
+
+Replication Factor = 3
+
+min.insync.replicas = 2
+
+acks = all
+
+Đây cũng là cấu hình được áp dụng phổ biến trong các nền tảng giao dịch tài chính và chứng khoán có yêu cầu cao về HA và durability.
+
+
+đối với giải pháp các topic đang để replicas =2 tôi sẽ thực hiện nâng replica =3 câu hỏi khi thực hiện update các topic để nâng số lượng replica thì kafka sẽ làm việc như thế nào và có gây ảnh ưởng tới dịch vụ đang chạy hay không 
+
+Đây là một câu hỏi rất hay và cũng là một trong những operation mà các SRE của các ngân hàng, chứng khoán thường phải thực hiện khi mở rộng Kafka Cluster.
+
+Câu trả lời ngắn gọn là:
+
+Có thể nâng Replica Factor từ 2 lên 3 mà không cần downtime, nhưng Kafka sẽ tạo ra một lượng lớn replication traffic (reassignment). Nếu không có kế hoạch và giới hạn băng thông, nó hoàn toàn có thể ảnh hưởng tới latency của Producer/Consumer.
+
+Tôi sẽ phân tích ở mức Kafka Internal.
+
+Giả sử hiện tại
+Cluster
+
+Broker1
+Broker2
+Broker3
+Topic A
+
+RF = 2
+
+Partition0
+
+Leader  -> Broker1
+
+Follower -> Broker2
+Broker3 chưa chứa replica nào.
+
+B1  Leader
+
+B2  Replica
+
+B3
+Bây giờ bạn muốn
+
+RF = 3
+thành
+
+B1 Leader
+
+B2 Replica
+
+B3 Replica
+Khi thực hiện Alter Replica Assignment
+Ví dụ
+
+kafka-reassign-partitions.sh
+hoặc
+
+AdminClient.alterPartitionReassignments()
+Kafka KHÔNG thực hiện như sau
+
+Stop topic
+
+Copy dữ liệu
+
+Start topic
+mà làm online hoàn toàn.
+
+Kafka thực hiện những gì?
+Có khoảng 6 bước.
+
+Bước 1
+Controller ghi metadata mới.
+
+Replica Assignment
+
+Before
+
+P0
+
+B1
+B2
+Sau
+
+P0
+
+B1
+B2
+B3
+Lưu ý
+
+Leader
+
+vẫn là
+
+Broker1
+không đổi.
+
+Do đó
+
+Producer
+
+Consumer
+
+không hề biết đang có thay đổi.
+
+Bước 2
+Broker3 tạo Replica
+
+Ví dụ
+
+/data/kafka/topicA-0
+lúc này hoàn toàn rỗng.
+
+Offset
+
+0
+Bước 3
+Leader bắt đầu Replica Fetch
+
+Đây là bước quan trọng nhất.
+
+Broker3 gửi
+
+FetchRequest
+tới Broker1.
+
+Broker3
+
+------------->
+
+Broker1
+Broker1 trả về
+
+segment00000.log
+
+segment00001.log
+
+segment00002.log
+
+...
+Toàn bộ log được copy.
+
+Giống hệt MySQL Replica
+
+hoặc PostgreSQL Streaming Replication.
+
+Trong lúc copy
+Producer vẫn ghi bình thường.
+
+Ví dụ
+
+Producer đang ghi
+
+Offset
+
+1000
+1001
+1002
+1003
+Broker3 đồng thời
+
+Copy
+
+0-1000
+
+1001
+
+1002
+
+1003
+Replica Fetcher sẽ tiếp tục bắt kịp.
+
+ISR lúc này thế nào?
+Ban đầu
+
+ISR
+
+B1
+B2
+Broker3
+
+KHÔNG nằm trong ISR
+vì
+
+lag quá lớn
+Điều này rất quan trọng.
+
+Kafka không đưa replica mới vào ISR ngay lập tức.
+
+Khi Broker3 catch-up
+Ví dụ
+
+Leader
+
+Offset
+
+105000
+Broker3
+
+104998
+chỉ lệch
+
+2 records
+nhỏ hơn
+
+replica.lag.time.max.ms
+Broker3 sẽ được thêm vào
+
+ISR
+
+B1
+
+B2
+
+B3
+Từ đây
+
+Producer
+
+acks=all
+sẽ ACK sau khi
+
+B1
+
+B2
+
+B3
+đều ghi xong (thực tế Kafka yêu cầu tối thiểu min.insync.replicas, không nhất thiết đợi toàn bộ replica nếu có nhiều hơn).
+
+Leader có đổi không?
+Không.
+
+Kafka không đổi leader.
+
+Leader
+
+B1
+vẫn giữ nguyên.
+
+Do đó
+
+Producer
+
+Consumer
+
+không reconnect.
+
+Có ảnh hưởng dịch vụ không?
+Có.
+
+Nhưng không phải do
+
+Leader Switch
+mà do
+
+Replication Traffic
+Ví dụ
+
+Topic
+
+10 TB
+Bạn tăng RF
+
+2
+
+->
+
+3
+Kafka phải copy
+
+10 TB
+sang Broker3.
+
+Nếu
+
+200 Topics
+
+5000 Partitions
+thì lượng dữ liệu có thể là
+
+vài chục TB
+Tài nguyên nào sẽ tăng?
+1. Network
+Leader phải gửi thêm
+
+Replica Fetch Response
+cho Broker3.
+
+Network Out của Leader tăng mạnh.
+
+Producer
+
+|
+
+Leader
+
+|
+
+Replica1
+
+Replica2 (new)
+2. Disk Read
+Leader phải đọc segment cũ.
+
+segment00001
+
+segment00002
+
+segment00003
+IO Read tăng.
+
+3. Disk Write
+Broker3 ghi toàn bộ log.
+
+IO Write tăng.
+
+4. CPU
+Checksum
+
+Compression
+
+Decompression
+
+Replica Fetch
+
+đều tiêu tốn CPU.
+
+5. Page Cache
+Hàng TB dữ liệu được đọc.
+
+Linux Page Cache sẽ bị thay đổi.
+
+Đây là lý do latency có thể tăng.
+
+Producer có bị lỗi không?
+Thông thường
+
+Không.
+
+Kafka được thiết kế để việc này diễn ra online.
+
+Producer vẫn
+
+ACK
+
+ACK
+
+ACK
+bình thường.
+
+Khi nào Producer bị chậm?
+Nếu
+
+Replication quá lớn
+
+Ví dụ
+
+500 MB/s
+Replica Fetch chiếm hết
+
+Disk
+
+Network
+
+CPU
+Leader bắt đầu phản hồi chậm.
+
+Producer thấy
+
+RequestLatency
+
+10ms
+
+20ms
+
+80ms
+
+300ms
+Consumer thì sao?
+Consumer gần như không bị ảnh hưởng.
+
+Chỉ khi
+
+Disk IO
+
+Network
+
+quá tải
+
+thì
+
+Fetch Request
+
+mới chậm.
+
+Có cần restart Broker không?
+Không.
+
+Toàn bộ quá trình online.
+
+Broker
+
+Alive
+
+Producer
+
+Alive
+
+Consumer
+
+Alive
+Kafka có copy từng partition hay tất cả?
+Kafka copy
+
+Partition
+
+theo Replica Fetcher Thread
+Ví dụ
+
+Topic A
+
+P0
+
+P1
+
+P2
+
+P3
+Kafka sẽ tạo nhiều luồng fetch song song.
+
+Không phải toàn bộ cùng lúc.
+
+Có thể giới hạn tốc độ copy không?
+Đây là điều mà các SRE production luôn làm.
+
+Ví dụ
+
+--throttle
+50 MB/s
+
+100 MB/s
+
+200 MB/s
+Nếu không throttle
+
+Kafka
+
+Disk 100%
+
+Network 100%
+Producer latency tăng rất nhiều.
+
+Trong môi trường production của ngân hàng/chứng khoán, chúng tôi thường:
+
+Reassign theo từng batch (ví dụ 100–300 partition/lần thay vì toàn bộ).
+
+Đặt throttle (50–200 MB/s tùy hạ tầng).
+
+Thực hiện ngoài giờ giao dịch nếu khối lượng dữ liệu lớn.
+
+Theo dõi và điều chỉnh throttle theo thời gian thực.
+
+Điều gì xảy ra khi hoàn tất?
+ISR
+
+Before
+
+B1
+B2
+Sau
+
+B1
+B2
+B3
+Replica Assignment
+
+RF=3
+Producer
+
+acks=all
+vẫn hoạt động.
+
+Khi
+
+Broker1 chết
+ISR
+
+B2
+B3
+vẫn còn
+
+2 replicas
+=> Thỏa mãn
+
+min.insync.replicas = 2
+Producer vẫn ghi bình thường.
+
+Khuyến nghị cho môi trường tài chính/chứng khoán
+Nếu tôi là SRE phụ trách một nền tảng Kafka phục vụ hàng triệu giao dịch/ngày, tôi sẽ không tăng RF cho tất cả topic trong một lần. Thay vào đó:
+
+Kiểm tra dung lượng trống trên tất cả broker (nâng từ RF=2 lên RF=3 sẽ tăng khoảng 50% dung lượng lưu trữ).
+
+Phân nhóm topic theo mức độ quan trọng và dung lượng (critical, medium, low).
+
+Reassign theo từng đợt nhỏ, giới hạn số partition đang đồng bộ cùng lúc.
+
+Áp dụng throttle cho replication để bảo vệ producer latency.
+
+Theo dõi sát các metric:
+
+UnderReplicatedPartitions
+
+OfflinePartitionsCount
+
+BytesInPerSec / BytesOutPerSec
+
+RequestHandlerAvgIdlePercent
+
+ReplicaFetcherManager.MaxLag
+
+NetworkProcessorAvgIdlePercent
+
+Disk IOPS và Queue Depth trên từng broker
+
+Chỉ khi tất cả replica mới đã vào ISR và cluster ổn định mới chuyển sang batch tiếp theo.
+
+Đây là quy trình rolling migration giúp thay đổi replication factor mà vẫn duy trì SLA của hệ thống giao dịch. Nếu cluster của bạn có hàng nghìn partition hoặc dữ liệu ở mức nhiều terabyte, cách làm này sẽ giảm đáng kể nguy cơ tăng latency hoặc gây quá tải broker.
+
+
+trong trường hợp tăng replica từ 2 lên 3 và replica thứ 3 fetch message từ broker leader xong để kiểm tra replica 3 đầy đủ dữ liệu và copy thành công thì làm như thế nào 
+
+Đây chính là vấn đề mà các SRE thường phải xác minh sau khi thực hiện Partition Reassignment. Không chỉ nhìn thấy ReplicationFactor=3 là đủ, mà cần kiểm tra replica mới đã thực sự bắt kịp leader và trở thành ISR.
+
+Tôi sẽ phân tích theo mức độ từ dễ đến chuyên sâu.
+
+Mức 1 - Cách Kafka xác nhận replica đã đồng bộ
+Giả sử trước khi nâng:
+
+Partition 0
+
+Leader : Broker1
+
+Follower : Broker2
+Sau khi nâng RF=3:
+
+Partition 0
+
+Leader : Broker1
+
+Follower : Broker2
+
+Follower : Broker3 (NEW)
+Broker3 bắt đầu fetch từ offset 0
+
+Leader Offset
+
+0
+1
+2
+3
+...
+100000
+Broker3
+
+0
+1
+2
+3
+...
+99500
+Broker3 vẫn chưa vào ISR.
+
+Khi Broker3 fetch tới
+
+100000
+và không còn lag nữa
+
+Kafka Controller sẽ thêm Broker3 vào
+
+ISR
+
+1
+2
+3
+Đây là dấu hiệu đầu tiên cho thấy replica đã đồng bộ.
+
+Mức 2 - Kiểm tra bằng kafka-topics
+Lệnh đơn giản nhất
+
+kafka-topics.sh \
+ --bootstrap-server broker1:9092 \
+ --describe \
+ --topic payment
+Ví dụ kết quả
+
+Topic: payment
+
+Partition:0
+
+Leader:1
+
+Replicas:1,2,3
+
+Isr:1,2
+Điều này có nghĩa
+
+Broker3
+
+chưa sync xong
+Sau vài phút
+
+Partition:0
+
+Leader:1
+
+Replicas:1,2,3
+
+Isr:1,2,3
+=> Replica3 đã bắt kịp Leader.
+
+Đây là cách kiểm tra phổ biến nhất.
+
+Mức 3 - Kiểm tra Replica Lag
+Kafka cung cấp metric
+
+ReplicaFetcherManager
+JMX
+
+kafka.server
+
+ReplicaFetcherManager
+
+ConsumerLag
+Nếu
+
+Replica3 Lag
+
+100000
+
+90000
+
+50000
+
+100
+
+0
+Cuối cùng
+
+Lag = 0
+thì replica đã theo kịp.
+
+Prometheus thường có metric
+
+kafka_server_fetcherlagmetrics_consumerlag
+hoặc
+
+FetcherLagMetrics
+Mức 4 - Quan sát HW (High Watermark)
+Đây là cách mà các Platform Engineer thường dùng.
+
+Ví dụ
+
+Leader
+
+LEO
+
+100000
+High Watermark
+
+100000
+Replica3
+
+LEO
+
+100000
+Khi
+
+Leader LEO
+
+=
+
+Replica3 LEO
+và
+
+HW
+cũng bằng nhau
+
+=> Replica hoàn toàn synchronized.
+
+Mức 5 - Reassignment Status
+Nếu bạn dùng
+
+kafka-reassign-partitions.sh
+Kafka có lệnh
+
+--verify
+Ví dụ
+
+kafka-reassign-partitions.sh \
+ --bootstrap-server broker1:9092 \
+ --reassignment-json-file assignment.json \
+ --verify
+Nếu hoàn tất
+
+Status
+
+completed successfully
+Kafka đã xác nhận
+
+replica copy xong
+
+replica assignment thành công
+
+replica đã vào ISR
+
+Đây là cách chuẩn khi chạy migration.
+
+Mức 6 - Kiểm tra Offset trực tiếp
+Giả sử
+
+Leader
+
+Log End Offset
+
+2,000,000
+Replica3
+
+Log End Offset
+
+2,000,000
+Hai offset bằng nhau.
+
+Có thể dùng
+
+kafka-log-dirs.sh
+để xem.
+
+Ví dụ
+
+kafka-log-dirs.sh \
+ --bootstrap-server broker1:9092 \
+ --describe
+Bạn sẽ thấy
+
+Partition
+
+payment-0
+
+offset
+
+2000000
+trên cả Broker1 và Broker3.
+
+Mức 7 - Kiểm tra vật lý trên Broker
+Ví dụ
+
+/data/kafka/payment-0/
+Leader
+
+000000000000.log
+
+000000000001.log
+
+000000000002.log
+Replica3
+
+000000000000.log
+
+000000000001.log
+
+000000000002.log
+Kích thước gần tương đương.
+
+Nhưng
+
+Không nên dùng cách này để xác nhận, vì Kafka dùng Offset và High Watermark chứ không dựa vào kích thước file.
+
+Trong Production của ngân hàng/chứng khoán
+Một SRE thường không chỉ nhìn vào ISR.
+
+Chúng tôi thường có checklist như sau:
+
+Kiểm tra	Điều kiện PASS
+Replicas	1,2,3
+ISR	1,2,3
+UnderReplicatedPartitions	= 0
+OfflinePartitionsCount	= 0
+ReplicaFetcher Lag	= 0
+Leader LEO = Replica LEO	TRUE
+Reassignment Verify	Completed Successfully
+Khi tất cả đều đạt thì mới coi việc nâng RF đã hoàn tất.
+
+Điều tôi thường làm trong Production
+Nếu tôi đang vận hành Kafka cho hệ thống thanh toán hoặc chứng khoán, sau khi tăng RF tôi sẽ theo quy trình:
+
+B1 Leader
+
+↓
+
+Replica3 bắt đầu Fetch
+
+↓
+
+Theo dõi Replica Lag
+
+↓
+
+Lag giảm về 0
+
+↓
+
+Broker3 vào ISR
+
+↓
+
+UnderReplicatedPartitions = 0
+
+↓
+
+Verify reassignment = SUCCESS
+
+↓
+
+Hoàn thành migration
+Điều này đảm bảo không chỉ metadata đã đổi, mà dữ liệu trên replica mới thực sự đồng bộ và sẵn sàng tham gia phục vụ nếu broker leader gặp sự cố.
+
+Một lưu ý rất quan trọng
+Việc Broker3 xuất hiện trong Replicas chưa có nghĩa là đã an toàn.
+
+Ví dụ:
+
+Replicas: 1,2,3
+ISR:      1,2
+Nếu lúc này Broker1 chết, Broker3 không được dùng để bầu leader (vì chưa ở trong ISR và unclean.leader.election.enable=false trong các hệ thống production). Bạn vẫn chỉ còn Broker2 trong ISR, và với min.insync.replicas=2, producer sẽ tiếp tục bị từ chối ghi.
+
+Chỉ khi bạn thấy:
+
+Replicas: 1,2,3
+ISR:      1,2,3
+thì mới có thể kết luận rằng replica thứ ba đã đồng bộ hoàn toàn và cấu hình RF=3, min.insync.replicas=2 mới đạt được khả năng chịu lỗi mất một broker mà vẫn tiếp tục ghi dữ liệu.
+
+
